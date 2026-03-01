@@ -312,3 +312,46 @@
   color: var(--accent-warning);
   box-shadow: 0 0 10px rgba(255, 176, 0, 0.5);
 }
+
+.overlayAlert.pausedAlert {
+  border-color: #4a9eff;
+  color: #4a9eff;
+  box-shadow: 0 0 10px rgba(74, 158, 255, 0.5);
+  animation: none;
+}
+
+.overlayAlert.exitedAlert {
+  border-color: #666;
+  color: #888;
+  box-shadow: none;
+  animation: none;
+}
+
+.agentListItem.paused {
+  border-left-color: #4a9eff;
+}
+
+.agentListItem.exited {
+  border-left-color: #666;
+  opacity: 0.6;
+}
+
+.cardPaused {
+  border-color: rgba(74, 158, 255, 0.4);
+  box-shadow: inset 0 0 20px rgba(74, 158, 255, 0.1);
+}
+
+.cardExited {
+  border-color: rgba(100, 100, 100, 0.4);
+  opacity: 0.7;
+}
+
+.paused {
+  color: #4a9eff;
+  border-color: #4a9eff;
+}
+
+.exited {
+  color: #666;
+  border-color: #666;
+}

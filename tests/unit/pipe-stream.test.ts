@@ -99,4 +99,17 @@ describe("pipeStream", () => {
 
     expect(log.logs.length).toBe(2);
   });
+
+  test("force-flushes lineBuffer when it exceeds 64KB without newline", async () => {
+    const log = collectLogs();
+    // Create a chunk larger than 64KB with no newlines
+    const bigChunk = "x".repeat(65 * 1024);
+    const stream = makeStream([bigChunk]);
+
+    await pipeStream(stream, "stdout", log.fn);
+
+    // Should have force-flushed at least once
+    expect(log.logs.length).toBeGreaterThanOrEqual(1);
+    expect(log.logs[0].text.length).toBeGreaterThan(0);
+  });
 });

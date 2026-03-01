@@ -119,4 +119,26 @@ describe("applyMessage", () => {
     });
     expect(result[0].frame).toBeUndefined();
   });
+
+  test("update to PAUSED state works", () => {
+    const agents = [makeAgent()];
+    const result = applyMessage(agents, {
+      type: "update",
+      agent_id: "A-01",
+      data: { agent_state: "PAUSED", confidence_score: 100, reasoning: "Agent paused by operator" },
+    });
+    expect(result[0].state).toBe("PAUSED");
+    expect(result[0].confidence).toBe(100);
+  });
+
+  test("update to EXITED state works", () => {
+    const agents = [makeAgent({ state: "STUCK" })];
+    const result = applyMessage(agents, {
+      type: "update",
+      agent_id: "A-01",
+      data: { agent_state: "EXITED", confidence_score: 100, reasoning: "Agent exited (code 137)" },
+    });
+    expect(result[0].state).toBe("EXITED");
+    expect(result[0].reasoning).toBe("Agent exited (code 137)");
+  });
 });

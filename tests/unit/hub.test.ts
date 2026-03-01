@@ -216,4 +216,35 @@ describe("createHub", () => {
 
     probe.close();
   });
+
+  test("GET /health returns status with agent/dashboard counts", async () => {
+    hub = createHub(0);
+
+    // No agents yet
+    let res = await fetch(`http://localhost:${hub.server.port}/health`);
+    expect(res.status).toBe(200);
+    let body = await res.json();
+    expect(body.status).toBe("ok");
+    expect(body.agents).toBe(0);
+    expect(body.dashboards).toBe(0);
+    expect(typeof body.uptime).toBe("number");
+
+    // Register a probe and connect a dashboard
+    const probe = new WebSocket(wsUrl(hub, "/ws/probe"));
+    await waitForOpen(probe);
+    probe.send(JSON.stringify({ type: "register", agent_id: "health-test" }));
+
+    const dash = new WebSocket(wsUrl(hub, "/ws/dashboard"));
+    await waitForMessage(dash); // init
+
+    await Bun.sleep(50);
+
+    res = await fetch(`http://localhost:${hub.server.port}/health`);
+    body = await res.json();
+    expect(body.agents).toBe(1);
+    expect(body.dashboards).toBe(1);
+
+    probe.close();
+    dash.close();
+  });
 });

@@ -6,7 +6,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 // Types
 // ---------------------------------------------------------------------------
 
-export type AgentStateLabel = "PROGRESSING" | "STUCK" | "DANGEROUS" | "HALLUCINATING";
+export type AgentStateLabel = "PROGRESSING" | "STUCK" | "DANGEROUS" | "HALLUCINATING" | "PAUSED" | "EXITED";
 
 export interface LogLine {
   id: string;
@@ -130,45 +130,66 @@ export function applyMessage(agents: Agent[], data: Record<string, unknown>): Ag
 export function useAgentSocket(url: string) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string>("");
+  const [connected, setConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
+  const reconnectDelayRef = useRef(1000);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const unmountedRef = useRef(false);
 
   useEffect(() => {
-    const ws = new WebSocket(url);
-    wsRef.current = ws;
+    unmountedRef.current = false;
 
-    ws.onopen = () => {
-      console.log("Connected to Argus Server");
-    };
+    function connect() {
+      if (unmountedRef.current) return;
 
-    ws.onmessage = (event) => {
-      let data: Record<string, unknown>;
-      try {
-        data = JSON.parse(event.data);
-      } catch {
-        console.warn("[dashboard] Received malformed JSON:", event.data);
-        return;
-      }
-      console.log("Received data:", data);
+      const ws = new WebSocket(url);
+      wsRef.current = ws;
 
-      setAgents((prev) => {
-        const next = applyMessage(prev, data);
-        // Auto-select first agent if none selected
-        if (data.type === "init" && next.length > 0) {
-          setSelectedAgentId((prevId) => prevId || next[0].id);
+      ws.onopen = () => {
+        reconnectDelayRef.current = 1000;
+        setConnected(true);
+        console.log("Connected to Argus Server");
+      };
+
+      ws.onmessage = (event) => {
+        let data: Record<string, unknown>;
+        try {
+          data = JSON.parse(event.data);
+        } catch {
+          console.warn("[dashboard] Received malformed JSON:", event.data);
+          return;
         }
-        if (data.type === "agent_disconnected") {
-          setSelectedAgentId((prevId) => prevId === data.agent_id ? "" : prevId);
-        }
-        return next;
-      });
-    };
 
-    ws.onclose = () => {
-      console.log("Disconnected from Argus Server");
-    };
+        setAgents((prev) => {
+          const next = applyMessage(prev, data);
+          if (data.type === "init" && next.length > 0) {
+            setSelectedAgentId((prevId) => prevId || next[0].id);
+          }
+          if (data.type === "agent_disconnected") {
+            setSelectedAgentId((prevId) => prevId === data.agent_id ? "" : prevId);
+          }
+          return next;
+        });
+      };
+
+      ws.onclose = () => {
+        setConnected(false);
+        console.log("Disconnected from Argus Server");
+        if (!unmountedRef.current) {
+          const delay = reconnectDelayRef.current;
+          console.log(`[dashboard] Reconnecting in ${delay / 1000}s...`);
+          reconnectTimerRef.current = setTimeout(connect, delay);
+          reconnectDelayRef.current = Math.min(delay * 2, 30000);
+        }
+      };
+    }
+
+    connect();
 
     return () => {
-      ws.close();
+      unmountedRef.current = true;
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      wsRef.current?.close();
     };
   }, [url]);
 
@@ -193,6 +214,7 @@ export function useAgentSocket(url: string) {
     setSelectedAgentId,
     selectedAgent: agents.find((a) => a.id === selectedAgentId),
     sendCommand,
+    connected,
     wsRef,
   };
 }

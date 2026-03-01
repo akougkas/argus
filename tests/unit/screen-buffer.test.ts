@@ -4,8 +4,6 @@ import {
   getScreen,
   pushRawLine,
   getRawScreen,
-  pushScreenHistory,
-  getScreenHistory,
   pushFrame,
   getFrameBuffer,
   resetState,
@@ -41,8 +39,6 @@ describe("pushLine / getScreen", () => {
     for (let i = 0; i < SCREEN_ROWS * 3; i++) {
       pushLine(`line-${i}`);
     }
-    // After bounding, internal buffer should be <= 2 * SCREEN_ROWS
-    // We can verify by checking getScreen still returns correct last SCREEN_ROWS
     const screen = getScreen();
     const lines = screen.split("\n");
     expect(lines.length).toBe(SCREEN_ROWS);
@@ -67,28 +63,6 @@ describe("pushRawLine / getRawScreen", () => {
     const lines = getRawScreen().split("\n");
     expect(lines.length).toBe(SCREEN_ROWS);
     expect(lines[0]).toBe("raw-5");
-  });
-});
-
-describe("screenHistory", () => {
-  test("starts empty", () => {
-    expect(getScreenHistory()).toEqual([]);
-  });
-
-  test("pushes and retrieves", () => {
-    pushScreenHistory("screen1");
-    pushScreenHistory("screen2");
-    expect(getScreenHistory()).toEqual(["screen1", "screen2"]);
-  });
-
-  test("caps at 10 entries", () => {
-    for (let i = 0; i < 15; i++) {
-      pushScreenHistory(`s${i}`);
-    }
-    const h = getScreenHistory();
-    expect(h.length).toBe(10);
-    expect(h[0]).toBe("s5");
-    expect(h[9]).toBe("s14");
   });
 });
 
@@ -118,14 +92,12 @@ describe("resetState", () => {
   test("clears all buffers", () => {
     pushLine("line");
     pushRawLine("raw");
-    pushScreenHistory("history");
     pushFrame(Buffer.from("frame"));
 
     resetState();
 
     expect(getScreen()).toBe("");
     expect(getRawScreen()).toBe("");
-    expect(getScreenHistory()).toEqual([]);
     expect(getFrameBuffer()).toEqual([]);
   });
 });

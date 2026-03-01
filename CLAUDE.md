@@ -52,7 +52,9 @@ Start order: hub → probe → dashboard.
 - Tier 2 (on escalation): Vision-based deep reasoning with 2x2 temporal frame grid → JSON with state classification + confidence (45s timeout). Falls back to text if no frames available.
 - Visual capture (every 2s): ANSI → SVG (ansi-to-svg) → JPEG (sharp) → base64. Frames stored in buffer and streamed to dashboard.
 
-**page.tsx** — Next.js dashboard. CRT terminal aesthetic. Connects to `ws://localhost:8000/ws/dashboard`. Agent grid with live terminal feed, logs, state badges, confidence. Sidebar with pause/kill/inject controls.
+**page.tsx** — Next.js dashboard. CRT terminal aesthetic. Connects to `ws://localhost:8000/ws/dashboard`. Agent grid with live terminal feed, logs, state badges, confidence. Sidebar with pause/kill/inject controls. Auto-reconnects with exponential backoff.
+
+**Agent states:** PROGRESSING, STUCK, DANGEROUS, HALLUCINATING, PAUSED, EXITED
 
 ## WebSocket Protocol
 
@@ -67,8 +69,6 @@ Start order: hub → probe → dashboard.
 
 **Dashboard → Hub → Probe:**
 - `command` — `{action: "pause"|"resume"|"kill"|"inject", content?: string}`
-
-**Agent states:** PROGRESSING, STUCK, DANGEROUS, HALLUCINATING
 
 ## Environment Variables
 

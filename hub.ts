@@ -36,6 +36,7 @@ export function createHub(port: number): HubInstance {
   const agents = new Map<string, AgentState>();
   const probes = new Map<string, ServerWebSocket<WsData>>();
   const dashboards = new Set<ServerWebSocket<WsData>>();
+  const startTime = Date.now();
 
   function broadcast(msg: string) {
     for (const d of dashboards) d.send(msg);
@@ -105,6 +106,17 @@ export function createHub(port: number): HubInstance {
 
     fetch(req, server) {
       const url = new URL(req.url);
+      if (url.pathname === "/health") {
+        return new Response(JSON.stringify({
+          status: "ok",
+          agents: agents.size,
+          dashboards: dashboards.size,
+          uptime: Math.floor((Date.now() - startTime) / 1000),
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
       if (url.pathname === "/ws/probe") {
         return server.upgrade(req, { data: { type: "probe" } as WsData })
           ? undefined

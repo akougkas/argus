@@ -7,6 +7,7 @@ import sharp from "sharp";
 
 export const SCREEN_ROWS = 24;
 export const ANSI_RE = /\x1B(?:[@-Z\-_]|\[[0-?]*[ -/]*[@-~])/g;
+export const MAX_LINE_BUFFER = 64 * 1024; // 64KB safety valve
 
 // ---------------------------------------------------------------------------
 // Screen buffer — encapsulated state with reset for tests
@@ -14,7 +15,6 @@ export const ANSI_RE = /\x1B(?:[@-Z\-_]|\[[0-?]*[ -/]*[@-~])/g;
 
 let screenLines: string[] = [];
 let rawScreenLines: string[] = [];
-let screenHistory: string[] = [];
 const frameBuffer: Buffer[] = [];
 
 export function pushLine(line: string) {
@@ -39,15 +39,6 @@ export function getRawScreen(): string {
   return rawScreenLines.slice(-SCREEN_ROWS).join("\n");
 }
 
-export function getScreenHistory(): string[] {
-  return screenHistory;
-}
-
-export function pushScreenHistory(screen: string) {
-  screenHistory.push(screen);
-  if (screenHistory.length > 10) screenHistory.shift();
-}
-
 export function getFrameBuffer(): Buffer[] {
   return frameBuffer;
 }
@@ -60,7 +51,6 @@ export function pushFrame(buf: Buffer) {
 export function resetState() {
   screenLines = [];
   rawScreenLines = [];
-  screenHistory = [];
   frameBuffer.length = 0;
 }
 
@@ -163,6 +153,7 @@ export function handleCommand(
   msg: CommandPayload,
   childProc: ChildProcessLike | null,
   sendLog: (text: string, type?: string) => void,
+  sendState: (state: string, confidence: number, reasoning: string) => void,
 ): void {
   if (!childProc) {
     console.warn("[probe] No active process to command");
@@ -174,6 +165,7 @@ export function handleCommand(
       try {
         process.kill(childProc.pid, "SIGSTOP");
         sendLog("Agent paused (SIGSTOP)", "system");
+        sendState("PAUSED", 100, "Agent paused by operator");
         console.log(`[probe] SIGSTOP → PID ${childProc.pid}`);
       } catch (e) {
         console.error("[probe] Failed to pause:", e);
@@ -184,6 +176,7 @@ export function handleCommand(
       try {
         process.kill(childProc.pid, "SIGCONT");
         sendLog("Agent resumed (SIGCONT)", "system");
+        sendState("PROGRESSING", 100, "Agent resumed by operator");
         console.log(`[probe] SIGCONT → PID ${childProc.pid}`);
       } catch (e) {
         console.error("[probe] Failed to resume:", e);
@@ -195,6 +188,7 @@ export function handleCommand(
         childProc.kill(9);
         sendLog("Agent killed (SIGKILL)", "system");
         console.log(`[probe] SIGKILL → PID ${childProc.pid}`);
+        // EXITED state sent by the child exit handler, not here — avoids race
       } catch (e) {
         console.error("[probe] Failed to kill:", e);
       }
@@ -235,6 +229,18 @@ export async function pipeStream(
 
       lineBuffer += clean;
       rawLineBuffer += raw;
+
+      // Safety valve: flush if buffer grows too large without newlines
+      if (lineBuffer.length > MAX_LINE_BUFFER) {
+        console.warn(`[probe] pipeStream(${label}): lineBuffer exceeded ${MAX_LINE_BUFFER}B without newline, force-flushing`);
+        pushLine(lineBuffer.trim());
+        sendLog(lineBuffer.trim(), label === "stderr" ? "error" : "info");
+        lineBuffer = "";
+      }
+      if (rawLineBuffer.length > MAX_LINE_BUFFER) {
+        pushRawLine(rawLineBuffer);
+        rawLineBuffer = "";
+      }
 
       let idx;
       while ((idx = lineBuffer.indexOf("\n")) !== -1) {

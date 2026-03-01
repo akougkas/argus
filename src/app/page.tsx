@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Activity, ShieldAlert, Pause, Play, XCircle, Send, Terminal, Cpu, Eye, Code, Shield } from "lucide-react";
+import { Activity, ShieldAlert, Pause, Play, XCircle, Send, Terminal, Cpu, Eye, Code, Shield, CircleStop, Square } from "lucide-react";
 import styles from "./page.module.css";
 import { useAgentSocket } from "./useAgentSocket";
 
@@ -14,6 +14,7 @@ export default function Dashboard() {
     setSelectedAgentId,
     selectedAgent,
     sendCommand,
+    connected,
   } = useAgentSocket(`${HUB_URL}/ws/dashboard`);
 
   const logsEndRef = useRef<HTMLDivElement>(null);
@@ -42,8 +43,8 @@ export default function Dashboard() {
             <span className={styles.subtitle}>VLM Overseer Layer</span>
           </div>
           <div className={styles.statusIndicator}>
-            <div className={styles.dot}></div>
-            LIVE
+            <div className={styles.dot} style={connected ? undefined : { backgroundColor: '#ff003c', boxShadow: '0 0 10px #ff003c' }}></div>
+            {connected ? 'LIVE' : 'RECONNECTING'}
           </div>
         </div>
 
@@ -54,15 +55,17 @@ export default function Dashboard() {
               <div
                 key={agent.id}
                 onClick={() => setSelectedAgentId(agent.id)}
-                className={`${styles.agentListItem} ${selectedAgentId === agent.id ? styles.selected : ''} ${agent.state === 'DANGEROUS' ? styles.danger : ''} ${agent.state === 'STUCK' ? styles.warning : ''}`}
+                className={`${styles.agentListItem} ${selectedAgentId === agent.id ? styles.selected : ''} ${agent.state === 'DANGEROUS' ? styles.danger : ''} ${agent.state === 'STUCK' ? styles.warning : ''} ${agent.state === 'PAUSED' ? styles.paused : ''} ${agent.state === 'EXITED' ? styles.exited : ''}`}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <Cpu size={14} />
                   <span>{agent.id}</span>
                 </div>
-                {agent.state !== 'PROGRESSING' && (
+                {agent.state !== 'PROGRESSING' && agent.state !== 'PAUSED' && agent.state !== 'EXITED' && (
                    <ShieldAlert size={14} className={agent.state === 'DANGEROUS' ? 'danger-text' : 'warning-text'} />
                 )}
+                {agent.state === 'PAUSED' && <Pause size={14} style={{ color: '#4a9eff' }} />}
+                {agent.state === 'EXITED' && <Square size={14} style={{ color: '#666' }} />}
               </div>
             ))}
           </div>
@@ -116,7 +119,7 @@ export default function Dashboard() {
            {agents.map(agent => (
              <div
                key={agent.id}
-               className={`glass-panel ${styles.agentCard} ${agent.state === 'DANGEROUS' ? styles.cardDanger : ''} ${agent.state === 'STUCK' ? styles.cardWarning : ''}`}
+               className={`glass-panel ${styles.agentCard} ${agent.state === 'DANGEROUS' ? styles.cardDanger : ''} ${agent.state === 'STUCK' ? styles.cardWarning : ''} ${agent.state === 'PAUSED' ? styles.cardPaused : ''} ${agent.state === 'EXITED' ? styles.cardExited : ''}`}
              >
                {agent.state === 'DANGEROUS' && (
                  <div className={styles.overlayAlert}>
@@ -130,6 +133,18 @@ export default function Dashboard() {
                    POSSIBLE LOOP DETECTED
                  </div>
                )}
+               {agent.state === 'PAUSED' && (
+                 <div className={`${styles.overlayAlert} ${styles.pausedAlert}`}>
+                   <Pause size={16} />
+                   AGENT PAUSED BY OPERATOR
+                 </div>
+               )}
+               {agent.state === 'EXITED' && (
+                 <div className={`${styles.overlayAlert} ${styles.exitedAlert}`}>
+                   <CircleStop size={16} />
+                   AGENT EXITED
+                 </div>
+               )}
 
                <div className={styles.agentHeader}>
                  <div className={styles.agentInfo}>
@@ -138,7 +153,7 @@ export default function Dashboard() {
                  </div>
                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                    <span className="glow-text">{agent.confidence}% CONF</span>
-                   <span className={`badge ${agent.state === 'DANGEROUS' ? styles.danger : agent.state === 'STUCK' ? styles.warning : ''}`}>
+                   <span className={`badge ${agent.state === 'DANGEROUS' ? styles.danger : agent.state === 'STUCK' ? styles.warning : agent.state === 'PAUSED' ? styles.paused : agent.state === 'EXITED' ? styles.exited : ''}`}>
                      {agent.state}
                    </span>
                  </div>
@@ -166,7 +181,7 @@ export default function Dashboard() {
                      <p>[ Waiting for PTY Camera Buffer: {agent.id} ]</p>
                    </div>
                  )}
-                 {agent.state !== 'PROGRESSING' && (
+                 {(agent.state === 'STUCK' || agent.state === 'DANGEROUS' || agent.state === 'HALLUCINATING') && (
                    <div style={{ position: 'absolute', bottom: '10px', left: '50%', transform: 'translateX(-50%)', backgroundColor: 'rgba(0,0,0,0.8)', padding: '0.5rem', border: '1px dashed currentColor', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem', textAlign: 'center', backdropFilter: 'blur(5px)'}}>
                      <Activity size={24} className={agent.state === 'DANGEROUS' ? 'danger-text' : 'warning-text'} />
                      <span>VLM analysis triggered</span>

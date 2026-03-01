@@ -2,8 +2,6 @@ import { OpenAI } from "openai";
 import {
   extractJSON,
   getScreen,
-  getScreenHistory,
-  pushScreenHistory,
   getFrameBuffer,
   pushFrame,
   captureFrame,
@@ -50,6 +48,7 @@ let probeStarted = false;
 let isDeepReasoning = false;
 let isFastPerceptionRunning = false;
 let lastBroadcastedScreen = "";
+let lastAnalyzedScreen = ""; // BUG-1 fix: tier1 dedup
 
 // Timer IDs for cleanup
 let screenIntervalId: ReturnType<typeof setInterval> | null = null;
@@ -71,6 +70,14 @@ function send(payload: object) {
 
 function sendLog(text: string, type: string = "info") {
   send({ type: "log_update", agent_id: AGENT_ID, log: { text, type } });
+}
+
+function sendVlmState(state: string, confidence: number, reasoning: string) {
+  send({
+    type: "vlm_update",
+    agent_id: AGENT_ID,
+    data: { agent_state: state, confidence_score: confidence, reasoning },
+  });
 }
 
 function clearIntervals() {
@@ -108,10 +115,11 @@ async function startProbe() {
   pipeStream(childProc.stdout as ReadableStream<Uint8Array> | null, "stdout", sendLog);
   pipeStream(childProc.stderr as ReadableStream<Uint8Array> | null, "stderr", sendLog);
 
-  // Wait for exit
+  // Wait for exit — BUG-3 fix: send EXITED state
   childProc.exited.then((code) => {
     console.log(`[probe] Agent exited with code ${code}`);
     sendLog(`Agent exited (code ${code})`, "system");
+    sendVlmState("EXITED", 100, `Agent exited (code ${code})`);
     clearIntervals();
     childProc = null;
     probeStarted = false;
@@ -123,7 +131,6 @@ async function startProbe() {
     if (screen && screen !== lastBroadcastedScreen) {
       send({ type: "terminal_screen_update", agent_id: AGENT_ID, screen });
       lastBroadcastedScreen = screen;
-      pushScreenHistory(screen);
     }
   }, SCREEN_INTERVAL);
 
@@ -146,7 +153,7 @@ async function startProbe() {
     }
   }, FRAME_INTERVAL);
 
-  // Tier 1: Fast perception loop
+  // Tier 1: Fast perception loop — BUG-1 fix: skip if screen unchanged
   tier1IntervalId = setInterval(async () => {
     if (isDeepReasoning || isFastPerceptionRunning) return;
     isFastPerceptionRunning = true;
@@ -155,6 +162,10 @@ async function startProbe() {
       const lines = lastBroadcastedScreen.split("\n").filter((l) => l.trim());
       const trimmed = lines.slice(-15).join("\n");
       if (trimmed.length < 10) return;
+
+      // BUG-1: Don't re-analyze identical screen content
+      if (trimmed === lastAnalyzedScreen) return;
+      lastAnalyzedScreen = trimmed;
 
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
@@ -190,27 +201,10 @@ async function startProbe() {
         isDeepReasoning = true;
 
         console.log("[tier1] Anomaly detected — escalating to Tier 2");
-        send({
-          type: "vlm_update",
-          agent_id: AGENT_ID,
-          data: {
-            agent_state: "STUCK",
-            confidence_score: 50,
-            reasoning: "Tier 1 anomaly detected. Escalating to deep reasoner...",
-          },
-        });
-
+        sendVlmState("STUCK", 50, "Tier 1 anomaly detected. Escalating to deep reasoner...");
         runDeepReasoning();
       } else {
-        send({
-          type: "vlm_update",
-          agent_id: AGENT_ID,
-          data: {
-            agent_state: "PROGRESSING",
-            confidence_score: 99,
-            reasoning: "System nominal",
-          },
-        });
+        sendVlmState("PROGRESSING", 99, "System nominal");
       }
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError") {
@@ -268,13 +262,14 @@ Reply ONLY with a raw, valid JSON object:
         { signal: controller.signal },
       );
     } else {
+      // Text fallback: use current screen content
       console.log("[tier2] Text fallback mode");
-      const history = getScreenHistory().slice(-4).join("\n\n--- PREVIOUS FRAME ---\n\n");
+      const currentScreen = getScreen();
 
       response = await openai.chat.completions.create(
         {
           model: VLM_MODEL,
-          messages: [{ role: "user", content: `${basePrompt}\n\nTEMPORAL SCREEN HISTORY:\n${history}` }],
+          messages: [{ role: "user", content: `${basePrompt}\n\nCURRENT TERMINAL SCREEN:\n${currentScreen}` }],
           temperature: 0,
           max_tokens: 300,
           ...LLAMA_CPP_NO_THINK,
@@ -292,7 +287,7 @@ Reply ONLY with a raw, valid JSON object:
     const result = extractJSON(rawText);
     if (result) {
       console.log(`[tier2] Verdict: ${result.agent_state} — ${result.reasoning}`);
-      send({ type: "vlm_update", agent_id: AGENT_ID, data: result });
+      sendVlmState(result.agent_state, result.confidence_score, result.reasoning);
     } else {
       console.error("[tier2] Failed to extract JSON from response");
     }
@@ -333,7 +328,7 @@ function connect() {
       console.warn("[probe] Received malformed JSON from hub");
       return;
     }
-    if (msg.type === "command") handleCommand(msg, childProc, sendLog);
+    if (msg.type === "command") handleCommand(msg, childProc, sendLog, sendVlmState);
   };
 
   ws.onerror = () => {
