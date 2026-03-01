@@ -26,6 +26,16 @@ describe("applyMessage", () => {
     expect(result[0].state).toBe("PROGRESSING");
   });
 
+  test("init populates task from server data", () => {
+    const result = applyMessage([], {
+      type: "init",
+      data: {
+        "A-01": { state: "PROGRESSING", confidence: 100, reasoning: "", logs: [], task: "Run benchmarks" },
+      },
+    });
+    expect(result[0].task).toBe("Run benchmarks");
+  });
+
   test("init merges with existing agents", () => {
     const existing = makeAgent({ confidence: 80 });
     const result = applyMessage([existing], {

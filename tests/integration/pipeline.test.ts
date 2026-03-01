@@ -100,8 +100,9 @@ describe("full pipeline integration", () => {
     expect(dcMsg.type).toBe("agent_disconnected");
     expect(dcMsg.agent_id).toBe("INT-01");
 
-    // Verify cleanup
-    expect(hub.agents.has("INT-01")).toBe(false);
+    // Verify cleanup — agent preserved but disconnected, probe removed
+    expect(hub.agents.has("INT-01")).toBe(true);
+    expect(hub.agents.get("INT-01")?.connected).toBe(false);
     expect(hub.probes.has("INT-01")).toBe(false);
 
     dash.close();
@@ -139,8 +140,8 @@ describe("full pipeline integration", () => {
     const dcMsg = await waitForMessage(dash);
     expect(dcMsg.agent_id).toBe("MULTI-01");
 
-    expect(hub.agents.has("MULTI-01")).toBe(false);
-    expect(hub.agents.has("MULTI-02")).toBe(true);
+    expect(hub.agents.get("MULTI-01")?.connected).toBe(false);
+    expect(hub.agents.get("MULTI-02")?.connected).toBe(true);
 
     probe2.close();
     dash.close();

@@ -47,7 +47,7 @@ export function applyMessage(agents: Agent[], data: Record<string, unknown>): Ag
     const serverAgents: Agent[] = Object.entries(states).map(([id, s]) => ({
       id,
       name: id,
-      task: "",
+      task: (s.task as string) || "",
       state: (s.state as AgentStateLabel) || "PROGRESSING",
       confidence: (s.confidence as number) ?? 100,
       reasoning: (s.reasoning as string) || "",

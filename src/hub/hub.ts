@@ -14,6 +14,11 @@ export interface AgentState {
   confidence: number;
   reasoning: string;
   logs: Array<{ text: string; type: string }>;
+  task: string;
+  command: string;
+  startTime: number;
+  lastSeen: number;
+  connected: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -46,17 +51,45 @@ export function createHub(port: number): HubInstance {
     broadcast(JSON.stringify(payload));
   }
 
+  function connectedAgents(): Map<string, AgentState> {
+    const result = new Map<string, AgentState>();
+    for (const [id, a] of agents) {
+      if (a.connected) result.set(id, a);
+    }
+    return result;
+  }
+
   function handleProbeMessage(ws: ServerWebSocket<WsData>, msg: Record<string, unknown>) {
     if (msg.type === "register") {
       const id = msg.agent_id as string | undefined;
       if (!id) return;
       ws.data.agentId = id;
       probes.set(id, ws);
-      if (!agents.has(id)) {
-        agents.set(id, { state: "PROGRESSING", confidence: 100, reasoning: "", logs: [] });
+      const now = Date.now();
+      const metadata = msg.metadata as Record<string, unknown> | undefined;
+      const existing = agents.get(id);
+      if (existing) {
+        // Re-register: preserve state, update connection + metadata
+        existing.connected = true;
+        existing.lastSeen = now;
+        if (metadata?.task) existing.task = metadata.task as string;
+        if (metadata?.command) existing.command = metadata.command as string;
+        if (metadata?.start_time) existing.startTime = metadata.start_time as number;
+      } else {
+        agents.set(id, {
+          state: "PROGRESSING",
+          confidence: 100,
+          reasoning: "",
+          logs: [],
+          task: (metadata?.task as string) || "",
+          command: (metadata?.command as string) || "",
+          startTime: (metadata?.start_time as number) || now,
+          lastSeen: now,
+          connected: true,
+        });
       }
       console.log(`[hub] Probe registered: ${id}`);
-      broadcastJSON({ type: "init", data: Object.fromEntries(agents) });
+      broadcastJSON({ type: "init", data: Object.fromEntries(connectedAgents()) });
       return;
     }
 
@@ -68,6 +101,7 @@ export function createHub(port: number): HubInstance {
 
     const agentState = agents.get(agentId);
     if (!agentState) return;
+    agentState.lastSeen = Date.now();
 
     if (msg.type === "vlm_update") {
       const data = msg.data as Record<string, unknown> | undefined;
@@ -111,7 +145,7 @@ export function createHub(port: number): HubInstance {
       if (url.pathname === "/health") {
         return new Response(JSON.stringify({
           status: "ok",
-          agents: agents.size,
+          agents: connectedAgents().size,
           dashboards: dashboards.size,
           uptime: Math.floor((Date.now() - startTime) / 1000),
         }), {
@@ -136,7 +170,7 @@ export function createHub(port: number): HubInstance {
       open(ws: ServerWebSocket<WsData>) {
         if (ws.data.type === "dashboard") {
           dashboards.add(ws);
-          ws.send(JSON.stringify({ type: "init", data: Object.fromEntries(agents) }));
+          ws.send(JSON.stringify({ type: "init", data: Object.fromEntries(connectedAgents()) }));
           console.log("[hub] Dashboard connected");
         }
         if (ws.data.type === "probe") {
@@ -165,7 +199,11 @@ export function createHub(port: number): HubInstance {
         if (ws.data.type === "probe" && ws.data.agentId) {
           const id = ws.data.agentId;
           probes.delete(id);
-          agents.delete(id);
+          const agent = agents.get(id);
+          if (agent) {
+            agent.connected = false;
+            agent.lastSeen = Date.now();
+          }
           console.log(`[hub] Probe disconnected: ${id}`);
           broadcastJSON({ type: "agent_disconnected", agent_id: id });
         }

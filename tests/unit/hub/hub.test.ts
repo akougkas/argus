@@ -113,7 +113,9 @@ describe("createHub", () => {
     expect(msg.type).toBe("agent_disconnected");
     expect(msg.agent_id).toBe("dc-test");
 
-    expect(hub.agents.has("dc-test")).toBe(false);
+    // Agent preserved in map but marked disconnected
+    expect(hub.agents.has("dc-test")).toBe(true);
+    expect(hub.agents.get("dc-test")?.connected).toBe(false);
 
     dash.close();
   });
@@ -265,6 +267,9 @@ describe("createHub", () => {
     expect(agent?.state).toBe("PROGRESSING");
     expect(agent?.confidence).toBe(100);
     expect(agent?.logs).toEqual([]);
+    expect(agent?.connected).toBe(true);
+    expect(agent?.task).toBe("");
+    expect(typeof agent?.startTime).toBe("number");
 
     probe.close();
   });
@@ -297,6 +302,119 @@ describe("createHub", () => {
     expect(body.dashboards).toBe(1);
 
     probe.close();
+    dash.close();
+  });
+
+  test("register with metadata populates agent fields", async () => {
+    hub = createHub(0);
+
+    const probe = new WebSocket(wsUrl(hub, "/ws/probe"));
+    await waitForOpen(probe);
+    probe.send(JSON.stringify({
+      type: "register",
+      agent_id: "meta-01",
+      metadata: { task: "Run tests", command: "bun test", start_time: 1700000000000 },
+    }));
+
+    await Bun.sleep(50);
+
+    const agent = hub.agents.get("meta-01");
+    expect(agent?.task).toBe("Run tests");
+    expect(agent?.command).toBe("bun test");
+    expect(agent?.startTime).toBe(1700000000000);
+    expect(agent?.connected).toBe(true);
+
+    probe.close();
+  });
+
+  test("re-register after disconnect restores connection", async () => {
+    hub = createHub(0);
+
+    const dash = new WebSocket(wsUrl(hub, "/ws/dashboard"));
+    await waitForMessage(dash); // empty init
+
+    // Register, update state, disconnect
+    const probe1 = new WebSocket(wsUrl(hub, "/ws/probe"));
+    await waitForOpen(probe1);
+    probe1.send(JSON.stringify({ type: "register", agent_id: "reconn-01" }));
+    await waitForMessage(dash); // init
+
+    probe1.send(JSON.stringify({
+      type: "vlm_update",
+      data: { agent_state: "STUCK", confidence_score: 30, reasoning: "looping" },
+    }));
+    await waitForMessage(dash); // vlm update
+
+    probe1.close();
+    await waitForMessage(dash); // agent_disconnected
+
+    expect(hub.agents.get("reconn-01")?.connected).toBe(false);
+    expect(hub.agents.get("reconn-01")?.state).toBe("STUCK");
+
+    // Re-register from new connection
+    const probe2 = new WebSocket(wsUrl(hub, "/ws/probe"));
+    await waitForOpen(probe2);
+    probe2.send(JSON.stringify({
+      type: "register",
+      agent_id: "reconn-01",
+      metadata: { task: "Resumed work" },
+    }));
+    const initMsg = await waitForMessage(dash);
+    expect(initMsg.type).toBe("init");
+
+    // State preserved, connection restored, metadata updated
+    const agent = hub.agents.get("reconn-01");
+    expect(agent?.connected).toBe(true);
+    expect(agent?.state).toBe("STUCK");
+    expect(agent?.task).toBe("Resumed work");
+
+    probe2.close();
+    dash.close();
+  });
+
+  test("health counts only connected agents", async () => {
+    hub = createHub(0);
+
+    const probe = new WebSocket(wsUrl(hub, "/ws/probe"));
+    await waitForOpen(probe);
+    probe.send(JSON.stringify({ type: "register", agent_id: "hc-01" }));
+    await Bun.sleep(50);
+
+    let res = await fetch(`http://localhost:${hub.server.port}/health`);
+    let body = await res.json();
+    expect(body.agents).toBe(1);
+
+    probe.close();
+    await Bun.sleep(50);
+
+    // Agent still in map but disconnected — health should show 0
+    expect(hub.agents.has("hc-01")).toBe(true);
+    res = await fetch(`http://localhost:${hub.server.port}/health`);
+    body = await res.json();
+    expect(body.agents).toBe(0);
+  });
+
+  test("init only includes connected agents", async () => {
+    hub = createHub(0);
+
+    // Register and disconnect a probe
+    const probe = new WebSocket(wsUrl(hub, "/ws/probe"));
+    await waitForOpen(probe);
+    probe.send(JSON.stringify({ type: "register", agent_id: "ghost-01" }));
+    await Bun.sleep(50);
+    probe.close();
+    await Bun.sleep(50);
+
+    // Agent is preserved but disconnected
+    expect(hub.agents.has("ghost-01")).toBe(true);
+
+    // New dashboard connects — should NOT see the disconnected agent
+    const dash = new WebSocket(wsUrl(hub, "/ws/dashboard"));
+    const initMsg = await waitForMessage(dash);
+    expect(initMsg.type).toBe("init");
+    const data = initMsg.data as Record<string, unknown>;
+    expect(data["ghost-01"]).toBeUndefined();
+
     dash.close();
   });
 });

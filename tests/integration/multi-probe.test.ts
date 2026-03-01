@@ -110,8 +110,8 @@ describe("multi-probe orchestration", () => {
     expect(initMsg.type).toBe("init");
     const data = initMsg.data as Record<string, Record<string, unknown>>;
     expect(data["RECON-01"]).toBeDefined();
-    // Fresh hub state after disconnect (agent was deleted)
-    expect(data["RECON-01"].state).toBe("PROGRESSING");
+    // State preserved across disconnect/reconnect
+    expect(data["RECON-01"].state).toBe("STUCK");
 
     probe2.close(); dash.close();
   });
@@ -137,9 +137,9 @@ describe("multi-probe orchestration", () => {
     probes[1].close();
     await waitForMessage(dash); // agent_disconnected
 
-    expect(hub.agents.has("TRI-02")).toBe(false);
-    expect(hub.agents.has("TRI-01")).toBe(true);
-    expect(hub.agents.has("TRI-03")).toBe(true);
+    expect(hub.agents.get("TRI-02")?.connected).toBe(false);
+    expect(hub.agents.get("TRI-01")?.connected).toBe(true);
+    expect(hub.agents.get("TRI-03")?.connected).toBe(true);
 
     // Route command to TRI-03
     dash.send(JSON.stringify({ type: "command", agent_id: "TRI-03", action: "kill" }));

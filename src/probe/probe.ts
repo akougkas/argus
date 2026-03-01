@@ -28,6 +28,7 @@ const FAST_INTERVAL = parseInt(process.env.ARGUS_FAST_INTERVAL || "1000");
 const SCREEN_INTERVAL = parseInt(process.env.ARGUS_SCREEN_INTERVAL || "250");
 const FRAME_INTERVAL = parseInt(process.env.ARGUS_FRAME_INTERVAL || "2000");
 const TIER1_COOLDOWN = parseInt(process.env.ARGUS_TIER1_COOLDOWN || "5000");
+const AGENT_TASK = process.env.ARGUS_AGENT_TASK || "";
 
 // CLI: `bun run probe.ts -- python3 my_agent.py`  (default: demo_agent.ts)
 const cliArgs = process.argv.slice(2);
@@ -375,7 +376,15 @@ function connect() {
   ws.onopen = () => {
     reconnectDelay = 1000;
     console.log(`[probe] Connected to hub (${HUB_URL})`);
-    send({ type: "register", agent_id: AGENT_ID });
+    send({
+      type: "register",
+      agent_id: AGENT_ID,
+      metadata: {
+        task: AGENT_TASK,
+        command: SPAWN_CMD.join(" "),
+        start_time: Date.now(),
+      },
+    });
 
     // Re-send current state on reconnect (probe already running)
     if (probeStarted) {
