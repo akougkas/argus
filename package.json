@@ -3,10 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
+    "dev:dashboard": "bunx --bun next dev",
+    "dev:hub": "bun run hub.ts",
+    "dev:probe": "bun run probe.ts",
+    "build": "bunx --bun next build",
+    "start": "bunx --bun next start",
+    "lint": "bunx eslint"
   },
   "dependencies": {
     "@xterm/headless": "^6.0.0",
@@ -19,6 +21,7 @@
     "react-dom": "19.2.3"
   },
   "devDependencies": {
+    "@types/bun": "^1.3.9",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",

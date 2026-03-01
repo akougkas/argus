@@ -4,76 +4,92 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What is Argus
 
-Real-time visual verification and steering layer for autonomous AI agents — "Datadog for Autonomous Agents." A probe monitors agent terminal output via PTY + VLM, detects failures (stuck loops, destructive intent, hallucinations), and streams state to a dashboard with manual override controls.
+Real-time visual verification and steering layer for autonomous AI agents — "Datadog for Autonomous Agents." A probe monitors agent terminal output via PTY + VLM, detects failures (stuck loops, destructive intent, hallucinations), and streams state to a dashboard with manual override controls (pause, kill, inject prompt).
 
 ## Commands
 
 ```bash
-# Frontend (Next.js dashboard)
-npm run dev          # Dev server
-npm run build        # Production build
-npm run lint         # ESLint
+# Start the WebSocket hub (must be first)
+bun run dev:hub
 
-# Backend (Bun WebSocket hub + probe)
-bun run hub.ts       # Start WebSocket server on :8000
-bun run probe.ts     # Start VLM probe (spawns demo_agent.ts via PTY)
-bun run demo_agent.ts  # Run demo agent standalone
+# Start the Next.js dashboard
+bun run dev:dashboard
+
+# Start the probe (wraps demo agent by default)
+bun run dev:probe
+
+# Wrap any command instead
+bun run probe.ts -- python3 my_agent.py
+
+# Build / lint
+bun run build
+bun run lint
 ```
 
-Start order: hub → probe → dashboard (`npm run dev`).
+Start order: hub → probe → dashboard.
 
 ## Architecture
 
 ```
-demo_agent.ts ──PTY──▶ probe.ts ──WS──▶ hub.ts ──WS──▶ page.tsx
-  (agent)        ANSI    (VLM monitor)    (relay)        (dashboard)
-                                                            │
-                                                     pause/kill/inject
-                                                            │
-                                                    hub.ts ──▶ probe.ts
+[any command] ──PTY──▶ probe.ts ──WS──▶ hub.ts ──WS──▶ page.tsx (dashboard)
+                        │                  ▲                │
+                     VLM tiers             │          pause/kill/inject
+                    (Tier 1+2)             └────────────────┘
 ```
 
-**hub.ts** — Bun WebSocket server (:8000). Routes: `/ws/probe` (probe connections), `/ws/dashboard` (frontend connections). In-memory agent state, broadcasts updates to all dashboards.
+**hub.ts** — Bun WebSocket server (:8000). Two endpoints: `/ws/probe` and `/ws/dashboard`. Probes register with `{type: "register", agent_id}` on connect. Hub maintains agent state and routes dashboard commands to the correct probe. Port configurable via `ARGUS_HUB_PORT`.
 
-**probe.ts** — Two-tier VLM pipeline using xterm headless + node-pty:
-- Tier 1 (every 1s): Fast anomaly detection — "OK" vs "ANOMALY"
-- Tier 2 (on escalation): Deep reasoning with temporal context → classifies state + confidence score
-- VLM endpoint: local llama.cpp server, model `Qwen3.5-35B-A3B-UD-Q4_K_XL`
-- Broadcasts terminal screen diffs every 50ms
+**probe.ts** — PTY wrapper + two-tier VLM pipeline. Spawns any command via node-pty, captures terminal state with xterm headless. Streams screen diffs and log lines to hub. Handles commands from hub: SIGSTOP (pause), SIGCONT (resume), SIGKILL (kill), PTY write (inject). All config via env vars (see `.env.example`).
 
-**page.tsx** — Next.js dashboard. Connects to `ws://localhost:8000/ws/dashboard`. Shows agent cards with live terminal feed, logs, state badges, confidence scores. Sidebar with pause/kill/inject controls.
+**VLM Pipeline:**
+- Tier 1 (every 1s): Fast binary check — "ANOMALY" or "OK" (5s timeout)
+- Tier 2 (on escalation): Deep reasoning with temporal context → JSON with state classification + confidence (45s timeout)
 
-**Agent states:** PROGRESSING (green), STUCK (yellow), DANGEROUS (red), HALLUCINATING (red).
+**page.tsx** — Next.js dashboard. CRT terminal aesthetic. Connects to `ws://localhost:8000/ws/dashboard`. Agent grid with live terminal feed, logs, state badges, confidence. Sidebar with pause/kill/inject controls.
 
-**WS message types:** `init`, `frame_update`, `terminal_screen_update`, `log_update`, `vlm_update`, `update`, `pause`, `kill`, `inject`.
+## WebSocket Protocol
+
+**Probe → Hub → Dashboard:**
+- `register` — probe identifies itself with agent_id
+- `terminal_screen_update` — raw terminal text
+- `log_update` — individual log line `{text, type}`
+- `vlm_update` — state change from VLM `{agent_state, confidence_score, reasoning}`
+- `frame_update` — base64 JPEG frame (future use)
+- `init` — full agent roster sent to dashboard on connect
+
+**Dashboard → Hub → Probe:**
+- `command` — `{action: "pause"|"kill"|"inject", content?: string}`
+
+**Agent states:** PROGRESSING, STUCK, DANGEROUS, HALLUCINATING
+
+## Environment Variables
+
+All in `.env.example`. Key ones:
+- `ARGUS_VLM_URL` — OpenAI-compatible endpoint (default: `http://localhost:8080/v1`)
+- `ARGUS_VLM_MODEL` — Model name (default: `gpt-4o-mini`)
+- `ARGUS_AGENT_ID` — Agent identifier (default: `A-01`)
 
 ## Key Files
 
-- `src/app/page.tsx` — Dashboard UI (~570 lines, all in one component)
-- `src/app/globals.css` — CRT-styled dark theme (scanlines, green-on-black)
-- `hub.ts` — WebSocket relay server
-- `probe.ts` — PTY + two-tier VLM monitoring
-- `demo_agent.ts` — Simulated SWE-agent that loops into failure
-- `poc/observer.ts` — Alternative screenshot-based PoC (Phase 1 reference)
-- `docs/architecture.md` — Full system design with production vision
-- `docs/plan.md` — Multi-phase roadmap (PoC → Rust → Cloud → SaaS)
+- `hub.ts` — WebSocket relay with agent registry and command routing
+- `probe.ts` — PTY + two-tier VLM monitoring pipeline
+- `demo_agent.ts` — Simulated SWE-agent that loops into failure (for demos)
+- `src/app/page.tsx` — Dashboard UI (CRT terminal aesthetic)
+- `src/app/globals.css` — Dark theme with scanlines, green-on-black
+- `docs/architecture.md` — Full system design vision (Rust daemon, cloud, SaaS)
+- `docs/plan.md` — Multi-phase roadmap
 
 ## Tech Stack
 
-- **Frontend:** Next.js 16, React 19, TypeScript 5, CSS Modules (no Tailwind)
-- **Backend:** Bun runtime, native Bun WebSocket server
-- **Terminal:** node-pty + @xterm/headless for PTY capture
-- **VLM:** OpenAI-compatible API client against local llama.cpp
-- **Icons:** lucide-react
-- **Font:** JetBrains Mono
-
-## Project Status
-
-Phase 0 (scaffold) and Phase 1 (PoC) complete. No tests exist yet. The Python probe from early Phase 1 has been replaced by TypeScript (`probe.ts`). Phases 2-5 (Rust daemon, cloud infra, actuation, SaaS) are planned but not started.
+- **Runtime:** Bun (everything — backend, Next.js, scripts)
+- **Frontend:** Next.js 16, React 19, TypeScript 5, CSS Modules
+- **Terminal capture:** node-pty + @xterm/headless
+- **VLM:** OpenAI SDK against any compatible endpoint
+- **Font:** JetBrains Mono | **Icons:** lucide-react
 
 ## Conventions
 
 - Path alias: `@/*` → `./src/*`
-- Bun for backend runtime and non-Next scripts; npm for Next.js
+- Flat file structure at root (hub.ts, probe.ts, demo_agent.ts) — this is a PoC
 - ESLint flat config (v9) with next/core-web-vitals + next/typescript
-- CRT terminal aesthetic: green-on-black, scanlines, glow effects
+- No npm — bun only (package-lock.json is gitignored)

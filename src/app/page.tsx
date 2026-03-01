@@ -37,6 +37,7 @@ export default function Dashboard() {
   const [selectedAgentId, setSelectedAgentId] = useState<string>("A-01");
   const logsEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const injectRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     // Connect to local python-probe server
@@ -133,11 +134,12 @@ export default function Dashboard() {
 
   const sendCommand = (action: string) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && selectedAgent) {
-      wsRef.current.send(JSON.stringify({
-        type: "command",
-        agent_id: selectedAgent.id,
-        action: action
-      }));
+      const msg: Record<string, string> = { type: "command", agent_id: selectedAgent.id, action };
+      if (action === "inject" && injectRef.current) {
+        msg.content = injectRef.current.value;
+        injectRef.current.value = "";
+      }
+      wsRef.current.send(JSON.stringify(msg));
     }
   };
 
@@ -196,8 +198,9 @@ export default function Dashboard() {
                </button>
              </div>
              <div className={styles.promptArea}>
-               <textarea 
-                 className={styles.textarea} 
+               <textarea
+                 ref={injectRef}
+                 className={styles.textarea}
                  placeholder={`Inject context or instructions to ${selectedAgent.id}...`}
                ></textarea>
                <button className={styles.btn} style={{ width: '100%' }} onClick={() => sendCommand("inject")}>

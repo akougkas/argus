@@ -1,87 +1,164 @@
-import { serve } from "bun";
+import type { ServerWebSocket } from "bun";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+interface WsData {
+  type: "probe" | "dashboard";
+  agentId?: string;
+}
 
 interface AgentState {
   state: string;
   confidence: number;
   reasoning: string;
-  logs: any[];
+  logs: Array<{ text: string; type: string }>;
 }
 
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+
+const PORT = parseInt(process.env.ARGUS_HUB_PORT || "8000");
 const agents = new Map<string, AgentState>();
-const dashboards = new Set<any>();
-const probes = new Set<any>();
+const probes = new Map<string, ServerWebSocket<WsData>>(); // agentId → ws
+const dashboards = new Set<ServerWebSocket<WsData>>();
 
-agents.set("A-01", { state: "PROGRESSING", confidence: 100, reasoning: "", logs: [] });
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
-serve({
-  port: 8000,
+function broadcast(msg: string) {
+  for (const d of dashboards) d.send(msg);
+}
+
+function broadcastJSON(payload: object) {
+  broadcast(JSON.stringify(payload));
+}
+
+// ---------------------------------------------------------------------------
+// Message handlers
+// ---------------------------------------------------------------------------
+
+function handleProbeMessage(ws: ServerWebSocket<WsData>, msg: any) {
+  // Registration — must be first message from a probe
+  if (msg.type === "register") {
+    const id = msg.agent_id;
+    if (!id) return;
+    ws.data.agentId = id;
+    probes.set(id, ws);
+    agents.set(id, { state: "PROGRESSING", confidence: 100, reasoning: "", logs: [] });
+    console.log(`[hub] Probe registered: ${id}`);
+    // Notify all dashboards of updated agent roster
+    broadcastJSON({ type: "init", data: Object.fromEntries(agents) });
+    return;
+  }
+
+  const agentId = ws.data.agentId;
+  if (!agentId) {
+    console.warn("[hub] Probe sent data before registering");
+    return;
+  }
+
+  const agentState = agents.get(agentId);
+  if (!agentState) return;
+
+  if (msg.type === "vlm_update") {
+    agentState.state = msg.data?.agent_state || "PROGRESSING";
+    agentState.confidence = msg.data?.confidence_score ?? agentState.confidence;
+    agentState.reasoning = msg.data?.reasoning || "";
+    broadcastJSON({ type: "update", agent_id: agentId, data: msg.data });
+    return;
+  }
+
+  if (msg.type === "log_update") {
+    agentState.logs.push(msg.log);
+    if (agentState.logs.length > 50) agentState.logs.shift();
+  }
+
+  // Forward everything else (log_update, terminal_screen_update, frame_update) to dashboards
+  broadcast(JSON.stringify(msg));
+}
+
+function handleDashboardMessage(_ws: ServerWebSocket<WsData>, msg: any) {
+  if (msg.type !== "command") return;
+
+  const probeWs = probes.get(msg.agent_id);
+  if (!probeWs) {
+    console.warn(`[hub] No probe for agent ${msg.agent_id}`);
+    return;
+  }
+
+  // Forward command to the probe (action + content for inject)
+  probeWs.send(JSON.stringify({
+    type: "command",
+    action: msg.action,
+    content: msg.content,
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Server
+// ---------------------------------------------------------------------------
+
+Bun.serve<WsData>({
+  port: PORT,
+
   fetch(req, server) {
     const url = new URL(req.url);
     if (url.pathname === "/ws/probe") {
-      const upgraded = server.upgrade(req, { data: { type: "probe" } });
-      return upgraded ? undefined : new Response("Upgrade failed", { status: 500 });
+      return server.upgrade(req, { data: { type: "probe" } as WsData })
+        ? undefined
+        : new Response("Upgrade failed", { status: 500 });
     }
     if (url.pathname === "/ws/dashboard") {
-      const upgraded = server.upgrade(req, { data: { type: "dashboard" } });
-      return upgraded ? undefined : new Response("Upgrade failed", { status: 500 });
+      return server.upgrade(req, { data: { type: "dashboard" } as WsData })
+        ? undefined
+        : new Response("Upgrade failed", { status: 500 });
     }
-    return new Response("Not found", { status: 404 });
+    return new Response("Argus Hub", { status: 200 });
   },
+
   websocket: {
-    open(ws) {
-      if (ws.data.type === "probe") {
-        probes.add(ws);
-        console.log("Probe connected.");
-      }
+    open(ws: ServerWebSocket<WsData>) {
       if (ws.data.type === "dashboard") {
         dashboards.add(ws);
-        console.log("Dashboard connected.");
         ws.send(JSON.stringify({ type: "init", data: Object.fromEntries(agents) }));
+        console.log("[hub] Dashboard connected");
       }
-    },
-    message(ws, message) {
       if (ws.data.type === "probe") {
-        const payload = JSON.parse(message as string);
-        const agentId = payload.agent_id;
-        
-        if (agentId && !agents.has(agentId)) {
-          agents.set(agentId, { state: "PROGRESSING", confidence: 100, reasoning: "", logs: [] });
-        }
-        const agentState = agents.get(agentId)!;
-
-        if (payload.type === "vlm_update") {
-          agentState.state = payload.data.agent_state || "PROGRESSING";
-          agentState.confidence = payload.data.confidence_score || 100;
-          agentState.reasoning = payload.data.reasoning || "";
-          if (payload.data.reasoning) {
-            agentState.logs.push({
-              id: Date.now().toString() + Math.random().toString(36).substring(2, 6),
-              timestamp: new Date().toLocaleTimeString('en-US', { hour12: false }),
-              type: "system",
-              text: `[VLM Analysis]: ${payload.data.reasoning}`
-            });
-            if (agentState.logs.length > 50) agentState.logs.shift();
-          }
-          
-          const dashboardPayload = { type: "update", agent_id: agentId, data: payload.data };
-          for (const dashboard of dashboards) dashboard.send(JSON.stringify(dashboardPayload));
-          return;
-        } else if (payload.type === "log_update") {
-          agentState.logs.push(payload.log);
-          if (agentState.logs.length > 50) agentState.logs.shift();
-        }
-
-        // Broadcast everything from probe to dashboards
-        for (const dashboard of dashboards) {
-          dashboard.send(message);
-        }
+        console.log("[hub] Probe connected (awaiting registration)");
       }
     },
-    close(ws) {
-      if (ws.data.type === "probe") probes.delete(ws);
-      if (ws.data.type === "dashboard") dashboards.delete(ws);
-    }
-  }
+
+    message(ws: ServerWebSocket<WsData>, raw) {
+      let payload: any;
+      try {
+        payload = JSON.parse(raw as string);
+      } catch {
+        console.error("[hub] Invalid JSON from", ws.data.type);
+        return;
+      }
+
+      if (ws.data.type === "probe") handleProbeMessage(ws, payload);
+      else if (ws.data.type === "dashboard") handleDashboardMessage(ws, payload);
+    },
+
+    close(ws: ServerWebSocket<WsData>) {
+      if (ws.data.type === "dashboard") {
+        dashboards.delete(ws);
+        console.log("[hub] Dashboard disconnected");
+      }
+      if (ws.data.type === "probe" && ws.data.agentId) {
+        const id = ws.data.agentId;
+        probes.delete(id);
+        agents.delete(id);
+        console.log(`[hub] Probe disconnected: ${id}`);
+        broadcastJSON({ type: "agent_disconnected", agent_id: id });
+      }
+    },
+  },
 });
 
-console.log("Bun Hub Server running on ws://localhost:8000");
+console.log(`[hub] Argus Hub running on ws://localhost:${PORT}`);
