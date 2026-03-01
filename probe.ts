@@ -1,5 +1,3 @@
-import * as pty from "node-pty";
-import { Terminal } from "@xterm/headless";
 import { OpenAI } from "openai";
 
 // ---------------------------------------------------------------------------
@@ -12,7 +10,8 @@ const VLM_URL = process.env.ARGUS_VLM_URL || "http://localhost:8080/v1";
 const VLM_MODEL = process.env.ARGUS_VLM_MODEL || "gpt-4o-mini";
 const VLM_KEY = process.env.ARGUS_VLM_KEY || "no-key";
 const FAST_INTERVAL = parseInt(process.env.ARGUS_FAST_INTERVAL || "1000");
-const SCREEN_INTERVAL = parseInt(process.env.ARGUS_SCREEN_INTERVAL || "50");
+const SCREEN_INTERVAL = parseInt(process.env.ARGUS_SCREEN_INTERVAL || "100");
+const SCREEN_ROWS = 24;
 
 // CLI: `bun run probe.ts -- python3 my_agent.py`  (default: demo_agent.ts)
 const cliArgs = process.argv.slice(2);
@@ -24,16 +23,18 @@ const openai = new OpenAI({ baseURL: VLM_URL, apiKey: VLM_KEY });
 // State
 // ---------------------------------------------------------------------------
 
-const term = new Terminal({ cols: 120, rows: 24, allowProposedApi: true });
 const ANSI_RE = /\x1B(?:[@-Z\-_]|\[[0-?]*[ -/]*[@-~])/g;
 
 let ws: WebSocket;
-let ptyProcess: pty.IPty | null = null;
+let childProc: ReturnType<typeof Bun.spawn> | null = null;
 let probeStarted = false;
 let isDeepReasoning = false;
 let isFastPerceptionRunning = false;
 let lastBroadcastedScreen = "";
 let screenHistory: string[] = [];
+
+// Rolling line buffer — the "screen" is the last SCREEN_ROWS lines
+let screenLines: string[] = [];
 
 // Reconnection backoff
 let reconnectDelay = 1000;
@@ -54,12 +55,9 @@ function sendLog(text: string, type: string = "info") {
 }
 
 function extractJSON(text: string): any | null {
-  // 1. Direct parse
   try { return JSON.parse(text); } catch {}
-  // 2. Fenced code block
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
   if (fenced) try { return JSON.parse(fenced[1]); } catch {}
-  // 3. Brace extraction (VLM prepends/appends commentary)
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start !== -1 && end > start) {
@@ -69,13 +67,15 @@ function extractJSON(text: string): any | null {
 }
 
 function getScreen(): string {
-  let screen = "";
-  const buf = term.buffer.active;
-  for (let i = 0; i < term.rows; i++) {
-    const line = buf.getLine(i);
-    screen += (line ? line.translateToString(true).trimEnd() : "") + "\n";
+  return screenLines.slice(-SCREEN_ROWS).join("\n");
+}
+
+function pushLine(line: string) {
+  screenLines.push(line);
+  // Keep bounded (2x screen for scrollback context)
+  if (screenLines.length > SCREEN_ROWS * 2) {
+    screenLines = screenLines.slice(-SCREEN_ROWS * 2);
   }
-  return screen.replace(/\n+$/, "");
 }
 
 // ---------------------------------------------------------------------------
@@ -83,7 +83,7 @@ function getScreen(): string {
 // ---------------------------------------------------------------------------
 
 function handleCommand(msg: any) {
-  if (!ptyProcess) {
+  if (!childProc) {
     console.warn("[probe] No active process to command");
     return;
   }
@@ -91,9 +91,9 @@ function handleCommand(msg: any) {
   switch (msg.action) {
     case "pause":
       try {
-        process.kill(ptyProcess.pid, "SIGSTOP");
+        process.kill(childProc.pid, "SIGSTOP");
         sendLog("Agent paused (SIGSTOP)", "system");
-        console.log(`[probe] SIGSTOP sent to PID ${ptyProcess.pid}`);
+        console.log(`[probe] SIGSTOP → PID ${childProc.pid}`);
       } catch (e) {
         console.error("[probe] Failed to pause:", e);
       }
@@ -101,9 +101,9 @@ function handleCommand(msg: any) {
 
     case "resume":
       try {
-        process.kill(ptyProcess.pid, "SIGCONT");
+        process.kill(childProc.pid, "SIGCONT");
         sendLog("Agent resumed (SIGCONT)", "system");
-        console.log(`[probe] SIGCONT sent to PID ${ptyProcess.pid}`);
+        console.log(`[probe] SIGCONT → PID ${childProc.pid}`);
       } catch (e) {
         console.error("[probe] Failed to resume:", e);
       }
@@ -111,18 +111,20 @@ function handleCommand(msg: any) {
 
     case "kill":
       try {
-        process.kill(ptyProcess.pid, "SIGKILL");
+        childProc.kill(9);
         sendLog("Agent killed (SIGKILL)", "system");
-        console.log(`[probe] SIGKILL sent to PID ${ptyProcess.pid}`);
+        console.log(`[probe] SIGKILL → PID ${childProc.pid}`);
       } catch (e) {
         console.error("[probe] Failed to kill:", e);
       }
       break;
 
     case "inject":
-      if (msg.content) {
-        ptyProcess.write(msg.content + "\n");
-        sendLog(`Injected prompt: ${msg.content}`, "system");
+      if (msg.content && childProc.stdin) {
+        const writer = childProc.stdin.getWriter();
+        writer.write(new TextEncoder().encode(msg.content + "\n"));
+        writer.releaseLock();
+        sendLog(`Injected: ${msg.content}`, "system");
         console.log(`[probe] Injected: ${msg.content}`);
       }
       break;
@@ -130,61 +132,45 @@ function handleCommand(msg: any) {
 }
 
 // ---------------------------------------------------------------------------
-// PTY + Monitoring pipeline
+// Subprocess + Monitoring pipeline
 // ---------------------------------------------------------------------------
 
-function startProbe() {
+async function startProbe() {
   if (probeStarted) return;
   probeStarted = true;
 
-  const [cmd, ...args] = SPAWN_CMD;
   console.log(`[probe] Spawning: ${SPAWN_CMD.join(" ")}`);
 
   try {
-    ptyProcess = pty.spawn(cmd, args, {
-      name: "xterm-color",
-      cols: 120,
-      rows: 24,
+    childProc = Bun.spawn(SPAWN_CMD, {
       cwd: process.cwd(),
       env: { ...process.env, FORCE_COLOR: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+      stdin: "pipe",
     });
   } catch (e) {
-    console.error(`[probe] Failed to spawn "${cmd}":`, e);
+    console.error(`[probe] Failed to spawn:`, e);
     probeStarted = false;
     return;
   }
 
-  let lineBuffer = "";
+  // Read stdout and stderr streams
+  pipeStream(childProc.stdout, "stdout");
+  pipeStream(childProc.stderr, "stderr");
 
-  ptyProcess.onData((data) => {
-    term.write(data);
-
-    // Extract log lines
-    const clean = data.replace(ANSI_RE, "");
-    lineBuffer += clean;
-
-    let idx;
-    while ((idx = lineBuffer.indexOf("\n")) !== -1) {
-      const line = lineBuffer.slice(0, idx).trim();
-      lineBuffer = lineBuffer.slice(idx + 1);
-      if (line) {
-        const isError = /error|exception|fatal|✖/i.test(line);
-        sendLog(line, isError ? "error" : "info");
-      }
-    }
-  });
-
-  ptyProcess.onExit(({ exitCode }) => {
-    console.log(`[probe] Agent exited with code ${exitCode}`);
-    sendLog(`Agent exited (code ${exitCode})`, "system");
-    ptyProcess = null;
+  // Wait for exit
+  childProc.exited.then((code) => {
+    console.log(`[probe] Agent exited with code ${code}`);
+    sendLog(`Agent exited (code ${code})`, "system");
+    childProc = null;
     probeStarted = false;
   });
 
-  // Screen broadcast loop
+  // Screen broadcast loop — sends the rolling line buffer as terminal screen
   setInterval(() => {
     const screen = getScreen();
-    if (screen !== lastBroadcastedScreen) {
+    if (screen && screen !== lastBroadcastedScreen) {
       send({ type: "terminal_screen_update", agent_id: AGENT_ID, screen });
       lastBroadcastedScreen = screen;
       screenHistory.push(screen);
@@ -229,7 +215,6 @@ function startProbe() {
         (!result.includes("OK") && (result.includes("ERROR") || result.includes("FAIL")));
 
       if (isAnomaly) {
-        // Set flag synchronously BEFORE any async work (race condition fix)
         if (isDeepReasoning) return;
         isDeepReasoning = true;
 
@@ -244,7 +229,6 @@ function startProbe() {
           },
         });
 
-        // Fire-and-forget — don't block the fast loop
         runDeepReasoning();
       } else {
         send({
@@ -267,6 +251,41 @@ function startProbe() {
       isFastPerceptionRunning = false;
     }
   }, FAST_INTERVAL);
+}
+
+// ---------------------------------------------------------------------------
+// Stream reader — pipes subprocess output into screen buffer + log lines
+// ---------------------------------------------------------------------------
+
+async function pipeStream(stream: ReadableStream<Uint8Array> | null, label: string) {
+  if (!stream) return;
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let lineBuffer = "";
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      const raw = decoder.decode(value, { stream: true });
+      const clean = raw.replace(ANSI_RE, "");
+      lineBuffer += clean;
+
+      let idx;
+      while ((idx = lineBuffer.indexOf("\n")) !== -1) {
+        const line = lineBuffer.slice(0, idx).trim();
+        lineBuffer = lineBuffer.slice(idx + 1);
+        if (line) {
+          pushLine(line);
+          const isError = label === "stderr" || /error|exception|fatal|✖/i.test(line);
+          sendLog(line, isError ? "error" : "info");
+        }
+      }
+    }
+  } catch {
+    // Stream closed
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -331,10 +350,8 @@ function connect() {
   ws = new WebSocket(HUB_URL);
 
   ws.onopen = () => {
-    reconnectDelay = 1000; // Reset on success
+    reconnectDelay = 1000;
     console.log(`[probe] Connected to hub (${HUB_URL})`);
-
-    // Register with hub
     send({ type: "register", agent_id: AGENT_ID });
     startProbe();
   };
