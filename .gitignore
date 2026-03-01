@@ -44,4 +44,5 @@ package-lock.json
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-*.png
+# screenshots (keep docs/assets/)
+/image.png
