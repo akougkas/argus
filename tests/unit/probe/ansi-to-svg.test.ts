@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { ansiToSvg } from "../../ansi-to-svg";
+import { ansiToSvg } from "../../../src/probe/ansi-to-svg";
 
 describe("ansiToSvg", () => {
   test("empty input returns valid SVG", () => {
@@ -102,6 +102,46 @@ describe("ansiToSvg", () => {
   test("strips non-SGR escape sequences", () => {
     // Cursor movement + text
     const svg = ansiToSvg("\x1b[2Jhello\x1b[1;1H");
+    expect(svg).toContain("hello");
+    expect(svg).not.toContain("\x1b");
+  });
+
+  test("reverse video swaps fg and bg", () => {
+    const svg = ansiToSvg("\x1b[7mreversed\x1b[0m", {
+      colors: { foregroundColor: "#00ff41", backgroundColor: "#0a0a0a" },
+    });
+    // Reversed: fg becomes bg rect, bg becomes text fill
+    expect(svg).toMatch(/rect.*fill="#00ff41"/);
+    expect(svg).toContain("reversed");
+  });
+
+  test("reverse video with explicit colors", () => {
+    const svg = ansiToSvg("\x1b[31;7mswapped\x1b[0m");
+    // Red fg + reverse: bg becomes red, fg becomes default
+    expect(svg).toMatch(/rect.*fill="#aa0000"/);
+  });
+
+  test("italic renders with font-style italic", () => {
+    const svg = ansiToSvg("\x1b[3mitalic text\x1b[0m");
+    expect(svg).toContain('font-style="italic"');
+    expect(svg).toContain("italic text");
+  });
+
+  test("strips scroll region and window manipulation sequences", () => {
+    // Scroll region set + window resize
+    const svg = ansiToSvg("\x1b[1;24rhello\x1b[8;40;80t");
+    expect(svg).toContain("hello");
+    expect(svg).not.toContain("\x1b");
+  });
+
+  test("strips alternate screen buffer sequences", () => {
+    const svg = ansiToSvg("\x1b[?1049hhello\x1b[?1049l");
+    expect(svg).toContain("hello");
+    expect(svg).not.toContain("\x1b");
+  });
+
+  test("strips single-char escape sequences (save/restore cursor)", () => {
+    const svg = ansiToSvg("\x1b7hello\x1b8");
     expect(svg).toContain("hello");
     expect(svg).not.toContain("\x1b");
   });

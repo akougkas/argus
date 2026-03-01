@@ -1,5 +1,5 @@
 import { describe, test, expect, afterEach } from "bun:test";
-import { createHub, type HubInstance } from "../../hub";
+import { createHub, type HubInstance } from "../../../src/hub/hub";
 
 let hub: HubInstance | null = null;
 

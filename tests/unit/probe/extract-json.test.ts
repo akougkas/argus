@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { extractJSON } from "../../probe-utils";
+import { extractJSON } from "../../../src/probe/probe-utils";
 
 describe("extractJSON", () => {
   test("parses raw valid JSON", () => {

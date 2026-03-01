@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { applyMessage, type Agent } from "../../src/app/useAgentSocket";
+import { applyMessage, type Agent } from "../../../src/app/useAgentSocket";
 
 function makeAgent(overrides: Partial<Agent> = {}): Agent {
   return {

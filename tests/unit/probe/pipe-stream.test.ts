@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from "bun:test";
-import { pipeStream, getScreen, getRawScreen, resetState } from "../../probe-utils";
+import { pipeStream, getScreen, getRawScreen, resetState } from "../../../src/probe/probe-utils";
 
 beforeEach(() => {
   resetState();

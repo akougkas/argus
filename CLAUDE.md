@@ -19,7 +19,7 @@ bun run dev:dashboard
 bun run dev:probe
 
 # Wrap any command instead
-bun run probe.ts -- python3 my_agent.py
+bun run src/probe/probe.ts -- python3 my_agent.py
 
 # Build / lint
 bun run build
@@ -85,18 +85,19 @@ All in `.env.example`. Key ones:
 
 ## Key Files
 
-- `hub.ts` — WebSocket relay with agent registry and command routing (`createHub()` factory)
-- `probe.ts` — VLM monitoring pipeline (connects to hub, spawns child process)
-- `probe-utils.ts` — Pure functions extracted from probe (screen buffers, JSON extraction, command handler, pipeStream)
-- `ansi-to-svg.ts` — Inline ANSI→SVG renderer (replaces unmaintained ansi-to-svg package)
+- `src/hub/hub.ts` — WebSocket relay with agent registry and command routing (`createHub()` factory)
+- `src/probe/probe.ts` — VLM monitoring pipeline (connects to hub, spawns child process)
+- `src/probe/probe-utils.ts` — Pure functions extracted from probe (screen buffers, JSON extraction, command handler, pipeStream)
+- `src/probe/ansi-to-svg.ts` — Inline ANSI→SVG renderer (replaces unmaintained ansi-to-svg package)
 - `src/app/useAgentSocket.ts` — Custom hook for dashboard WebSocket + `applyMessage()` pure function + rAF message batching
-- `demo_agent.ts` — Simulated SWE-agent that loops into failure (for demos)
+- `src/demo/demo_agent.ts` — Simulated SWE-agent that loops into failure (for demos)
 - `src/app/page.tsx` — Dashboard UI (CRT terminal aesthetic)
 - `src/app/globals.css` — Dark theme with scanlines, green-on-black
-- `docs/architecture.md` — Full system design vision (Rust daemon, cloud, SaaS)
 - `docs/plan.md` — Multi-phase roadmap
 - `tests/helpers.ts` — Shared test utilities (wsUrl, waitForMessage, waitForOpen)
-- `tests/unit/` — Unit tests (extract-json, screen-buffer, hub, handle-command, pipe-stream, anomaly-detection, apply-message, ansi-to-svg)
+- `tests/unit/hub/` — Hub unit tests
+- `tests/unit/probe/` — Probe unit tests (extract-json, screen-buffer, handle-command, pipe-stream, anomaly-detection, ansi-to-svg)
+- `tests/unit/app/` — Dashboard unit tests (apply-message)
 - `tests/integration/` — Integration tests (pipeline lifecycle, multi-probe orchestration)
 
 ## Tech Stack
@@ -111,6 +112,6 @@ All in `.env.example`. Key ones:
 ## Conventions
 
 - Path alias: `@/*` → `./src/*`
-- Flat file structure at root (hub.ts, probe.ts, demo_agent.ts) — this is a PoC
+- Backend code in `src/hub/`, `src/probe/`, `src/demo/` — tests mirror under `tests/unit/`
 - ESLint flat config (v9) with next/core-web-vitals + next/typescript
 - No npm — bun only (package-lock.json is gitignored)

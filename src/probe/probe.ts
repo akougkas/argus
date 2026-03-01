@@ -31,7 +31,7 @@ const TIER1_COOLDOWN = parseInt(process.env.ARGUS_TIER1_COOLDOWN || "5000");
 
 // CLI: `bun run probe.ts -- python3 my_agent.py`  (default: demo_agent.ts)
 const cliArgs = process.argv.slice(2);
-const SPAWN_CMD = cliArgs.length > 0 ? cliArgs : ["bun", "run", "demo_agent.ts"];
+const SPAWN_CMD = cliArgs.length > 0 ? cliArgs : ["bun", "run", "src/demo/demo_agent.ts"];
 
 const openai = new OpenAI({ baseURL: VLM_URL, apiKey: VLM_KEY });
 const visionClient = new OpenAI({ baseURL: VISION_URL, apiKey: VISION_KEY });

@@ -1,4 +1,4 @@
-import type { HubInstance } from "../hub";
+import type { HubInstance } from "../src/hub/hub";
 
 export function wsUrl(hub: HubInstance, path: string): string {
   return `ws://localhost:${hub.server.port}${path}`;

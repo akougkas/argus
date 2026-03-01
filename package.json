@@ -4,8 +4,8 @@
   "private": true,
   "scripts": {
     "dev:dashboard": "bunx --bun next dev",
-    "dev:hub": "bun run hub.ts",
-    "dev:probe": "bun run probe.ts",
+    "dev:hub": "bun run src/hub/hub.ts",
+    "dev:probe": "bun run src/probe/probe.ts",
     "build": "bunx --bun next build",
     "start": "bunx --bun next start",
     "lint": "bunx eslint",

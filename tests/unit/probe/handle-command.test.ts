@@ -1,5 +1,5 @@
 import { describe, test, expect, mock } from "bun:test";
-import { handleCommand, type ChildProcessLike } from "../../probe-utils";
+import { handleCommand, type ChildProcessLike } from "../../../src/probe/probe-utils";
 
 function makeMockProc(pid = 12345): ChildProcessLike & { killed: boolean; written: string[] } {
   const proc = {

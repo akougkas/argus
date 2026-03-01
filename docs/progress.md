@@ -30,38 +30,65 @@
 - [x] Empty state when no agents connected
 - [x] Fix log_update handler (add missing id/timestamp fields)
 
-## v0.1.0 — Testable Foundation (NEXT)
-- [ ] Refactor hub.ts: `createHub()` factory + `import.meta.main` guard
-- [ ] Refactor probe.ts: extract `probe-utils.ts`, parameterize deps
-- [ ] Extract `useAgentSocket` hook from page.tsx
-- [ ] Unit tests: extractJSON, screen buffer, hub routing, commands, pipeStream
-- [ ] Integration test: hub → probe → dashboard pipeline
-- [ ] Type safety: message schemas, validation guards
-- [ ] Fix silent failures (frame capture, stream close, dashboard JSON)
-- [ ] Timer cleanup on child process exit
-- [ ] Dashboard hub URL from `NEXT_PUBLIC_HUB_URL`
-- [ ] GitHub Actions CI: lint → build → test
-- [ ] 80%+ test coverage on core logic
-- [ ] Tag v0.1.0
+## v0.1.0 — Testable Foundation (DONE, tagged)
+- [x] Refactor hub.ts: `createHub()` factory + `import.meta.main` guard
+- [x] Refactor probe.ts: extract `probe-utils.ts`, parameterize deps
+- [x] Extract `useAgentSocket` hook from page.tsx
+- [x] Unit tests: extractJSON, screen buffer, hub routing, commands, pipeStream
+- [x] Integration test: hub → probe → dashboard pipeline
+- [x] Type safety: message schemas, validation guards
+- [x] Fix silent failures (frame capture, stream close, dashboard JSON)
+- [x] Timer cleanup on child process exit
+- [x] Dashboard hub URL from `NEXT_PUBLIC_HUB_URL`
+- [x] GitHub Actions CI: lint → build → test
+- [x] 80%+ test coverage on core logic
+- [x] Tag v0.1.0
 
-## v0.2.0 — Hardening
-- [ ] Dashboard auto-reconnect
-- [ ] Hub health check endpoint
-- [ ] Probe VLM health check at startup
-- [ ] Bound lineBuffer growth
-- [ ] Spawn failure retry
-- [ ] Remove redundant screenHistory
-- [ ] Evaluate ansi-to-svg replacement
-- [ ] React key monotonic counter
-- [ ] Memory profiling
+## v0.2.0 — Multi-Agent Reliability (DONE, tagged)
+- [x] Graceful shutdown (SIGINT/SIGTERM) on hub and probe
+- [x] Probe re-registration with cached VLM state
+- [x] Hub idempotent register (preserves state)
+- [x] Operator state protection (operatorOverride flag)
+- [x] Tier2 vision→text fallback on endpoint failure
+- [x] Inline ANSI→SVG renderer (replaced unmaintained package)
+- [x] Rate limiting (screen interval 250ms, rAF batching, tier1 cooldown)
+- [x] Multi-probe integration tests (5 scenarios)
+- [x] Dashboard auto-reconnect with exponential backoff
+- [x] Hub health check endpoint (`GET /health`)
+- [x] 95 tests, 0 failures across 10 test files
 
-## v0.3.0 — Multi-Agent & Persistence
-- [ ] Multi-probe routing
-- [ ] Agent metadata in register message
+## v0.2.1 — Project Restructuring (DONE)
+- [x] Reorganized backend code into `src/` structure:
+  - `src/hub/hub.ts` — WebSocket relay
+  - `src/probe/probe.ts` — VLM monitoring pipeline
+  - `src/probe/probe-utils.ts` — Pure functions
+  - `src/probe/ansi-to-svg.ts` — ANSI→SVG renderer
+  - `src/demo/demo_agent.ts` — Demo agent
+- [x] Tests mirror `src/` layout: `tests/unit/hub/`, `tests/unit/probe/`, `tests/unit/app/`
+- [x] Updated package.json scripts, CLAUDE.md, all imports
+- [x] 101 tests, 0 failures (6 new ANSI parser tests)
+
+## AWOC Integration — Phase 1: Visual Baseline (IN PROGRESS)
+- [x] Hardened ANSI→SVG parser for TUI compatibility:
+  - [x] Reverse video (SGR 7/27) — critical for TUI selection/highlighting
+  - [x] Italic (SGR 3/23) — used by TUI frameworks
+  - [x] Expanded escape stripping: scroll regions (`r`), window ops (`t`), single-char escapes (`ESC 7/8/D/M/E`), charset designation (`ESC(B`)
+  - [x] Tests for alternate screen buffer, cursor save/restore, scroll regions
+- [ ] Live validation: wrap `awoc` CLI and verify visual fidelity in dashboard
+- [ ] Tune frame capture timing for pi-tui refresh rate
+- **Known limitation:** Bun.spawn pipes stdout/stderr (no PTY), so full TUI cursor-positioning is linearized. The ANSI parser correctly strips these sequences and renders SGR styling. For pixel-perfect TUI rendering, the Phase 2 semantic side-channel provides deterministic state.
+
+## v0.3.0 — Persistence & Metadata (NEXT)
+- [ ] Agent metadata: task name, start time, wrapped command
 - [ ] SQLite log persistence
 - [ ] Post-mortem replay API
-- [ ] SSIM frame deduplication
+- [ ] SSIM frame deduplication at probe level
 - [ ] Dashboard metadata display + log search
+
+## AWOC Integration — Phase 2: Semantic Side-Channel
+- [ ] Local UDP/IPC listener in probe for telemetry payloads
+- [ ] Hub accepts structured telemetry alongside terminal streams
+- [ ] Telemetry-enhanced VLM prompts (Tier 2)
 
 ## v0.4.0 — Actuation & Alerts
 - [ ] Auto-pause on high-confidence DANGEROUS
@@ -69,6 +96,11 @@
 - [ ] Slack integration
 - [ ] State transition history
 - [ ] Dashboard timeline visualization
+
+## AWOC Integration — Phase 3-4: Synthesized Verification & Granular Steering
+- [ ] Bundle visual frames + semantic telemetry for VLM evaluation
+- [ ] Targeted AWOC commands (stoprun, steer) via dashboard
+- [ ] Application-specific intervention buttons
 
 ## v0.5.0 — Beta
 - [ ] Real agent end-to-end test

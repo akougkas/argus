@@ -8,7 +8,7 @@ import {
   getFrameBuffer,
   resetState,
   SCREEN_ROWS,
-} from "../../probe-utils";
+} from "../../../src/probe/probe-utils";
 
 beforeEach(() => {
   resetState();

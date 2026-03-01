@@ -50,7 +50,9 @@ interface Style {
   bg: string | null;
   bold: boolean;
   dim: boolean;
+  italic: boolean;
   underline: boolean;
+  reverse: boolean;
 }
 
 function escapeXml(s: string): string {
@@ -62,12 +64,16 @@ function applySgr(params: number[], style: Style, defaultFg: string): void {
   let i = 0;
   while (i < params.length) {
     const p = params[i];
-    if (p === 0) { style.fg = null; style.bg = null; style.bold = false; style.dim = false; style.underline = false; }
+    if (p === 0) { style.fg = null; style.bg = null; style.bold = false; style.dim = false; style.italic = false; style.underline = false; style.reverse = false; }
     else if (p === 1) style.bold = true;
     else if (p === 2) style.dim = true;
+    else if (p === 3) style.italic = true;
     else if (p === 4) style.underline = true;
+    else if (p === 7) style.reverse = true;
     else if (p === 22) { style.bold = false; style.dim = false; }
+    else if (p === 23) style.italic = false;
     else if (p === 24) style.underline = false;
+    else if (p === 27) style.reverse = false;
     else if (p >= 30 && p <= 37) style.fg = ANSI_COLORS[p - 30];
     else if (p === 38) {
       // Extended foreground: 38;5;n (256-color) or 38;2;r;g;b (truecolor)
@@ -100,8 +106,8 @@ function applySgr(params: number[], style: Style, defaultFg: string): void {
 
 // SGR escape regex: ESC [ <params> m
 const SGR_RE = /\x1B\[([0-9;]*)m/g;
-// Strip all other escape sequences (cursor movement, etc.)
-const OTHER_ESC_RE = /\x1B(?:\[[0-9;]*[A-HJKSTfhlnsu]|\][^\x07]*\x07|\[\?[0-9;]*[hl])/g;
+// Strip all other escape sequences (cursor movement, scroll regions, window ops, etc.)
+const OTHER_ESC_RE = /\x1B(?:\[[0-9;]*[A-HJKSTfghlnqrstu]|\][^\x07]*\x07|\[\?[0-9;]*[hl]|\[=[0-9;]*[hl]|[78DME]|\(B)/g;
 
 export function ansiToSvg(input: string, options?: AnsiToSvgOptions): string {
   const fontFace = options?.fontFace || "SauceCodePro Nerd Font, Source Code Pro, Courier";
@@ -124,7 +130,7 @@ export function ansiToSvg(input: string, options?: AnsiToSvgOptions): string {
 
   let content = `<rect x="0" y="0" width="${width}" height="${height}" fill="${bgColor}"/>`;
 
-  const style: Style = { fg: null, bg: null, bold: false, dim: false, underline: false };
+  const style: Style = { fg: null, bg: null, bold: false, dim: false, italic: false, underline: false, reverse: false };
 
   for (let row = 0; row < lines.length; row++) {
     const line = lines[row];
@@ -176,24 +182,29 @@ function renderSpan(
   const x = Math.round(col * charWidth * 100) / 100;
   const w = Math.round(text.length * charWidth * 100) / 100;
 
+  // Resolve effective colors — reverse video swaps fg/bg
+  const effectiveFg = style.reverse ? (style.bg || defaultFg) : style.fg;
+  const effectiveBg = style.reverse ? (style.fg || defaultFg) : style.bg;
+
   // Background rect
-  if (style.bg) {
+  if (effectiveBg) {
     const rectY = row * rowHeight;
-    result += `<rect x="${x}" y="${rectY}" width="${w}" height="${rowHeight}" fill="${style.bg}"`;
+    result += `<rect x="${x}" y="${rectY}" width="${w}" height="${rowHeight}" fill="${effectiveBg}"`;
     if (style.dim) result += ` opacity="0.5"`;
     result += `/>`;
   }
 
   // Skip whitespace-only spans with no styling
-  if (text.trim().length === 0 && !style.fg && !style.bold && !style.underline) {
+  if (text.trim().length === 0 && !effectiveFg && !style.bold && !style.italic && !style.underline) {
     return result;
   }
 
   // Text element
   const attrs: string[] = [];
-  if (style.fg) attrs.push(`fill="${style.fg}"`);
+  if (effectiveFg) attrs.push(`fill="${effectiveFg}"`);
   if (style.bold) attrs.push(`font-weight="bold"`);
-  if (style.dim && !style.bg) attrs.push(`opacity="0.5"`);
+  if (style.italic) attrs.push(`font-style="italic"`);
+  if (style.dim && !effectiveBg) attrs.push(`opacity="0.5"`);
   const attrStr = attrs.length > 0 ? " " + attrs.join(" ") : "";
 
   result += `<text x="${x}" y="${y}"${attrStr}>${escapeXml(text)}</text>`;
@@ -201,7 +212,7 @@ function renderSpan(
   // Underline path
   if (style.underline) {
     const uy = Math.round((y + ascent * 0.14) * 100) / 100;
-    const color = style.fg || defaultFg;
+    const color = effectiveFg || defaultFg;
     result += `<path d="M${x},${uy} L${x + w},${uy} Z" stroke="${color}"/>`;
   }
 
