@@ -1,157 +1,34 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { Activity, ShieldAlert, Pause, Play, XCircle, Send, Terminal, Cpu, Eye, Code, Shield } from "lucide-react";
 import styles from "./page.module.css";
+import { useAgentSocket } from "./useAgentSocket";
 
-type AgentState = "PROGRESSING" | "STUCK" | "DANGEROUS" | "HALLUCINATING";
-
-interface LogLine {
-  id: string;
-  timestamp: string;
-  text: string;
-  type: "system" | "info" | "error" | "warn";
-}
-
-interface Agent {
-  id: string;
-  name: string;
-  task: string;
-  state: AgentState;
-  logs: LogLine[];
-  confidence: number;
-  reasoning?: string;
-  frame?: string;
-  ptyScreen?: string;
-}
+const HUB_URL = process.env.NEXT_PUBLIC_HUB_URL || "ws://localhost:8000";
 
 export default function Dashboard() {
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [selectedAgentId, setSelectedAgentId] = useState<string>("");
+  const {
+    agents,
+    selectedAgentId,
+    setSelectedAgentId,
+    selectedAgent,
+    sendCommand,
+  } = useAgentSocket(`${HUB_URL}/ws/dashboard`);
+
   const logsEndRef = useRef<HTMLDivElement>(null);
-  const wsRef = useRef<WebSocket | null>(null);
   const injectRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    // Connect to local python-probe server
-    const ws = new WebSocket("ws://localhost:8000/ws/dashboard");
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      console.log("Connected to Argus Server");
-    };
-
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      console.log("Received data:", data);
-
-      if (data.type === "init") {
-        // Build agent list from server state — only real connected probes
-        const states = data.data as Record<string, any>;
-        const serverAgents: Agent[] = Object.entries(states).map(([id, s]) => ({
-          id,
-          name: id,
-          task: "",
-          state: s.state || "PROGRESSING",
-          confidence: s.confidence ?? 100,
-          reasoning: s.reasoning || "",
-          logs: (s.logs || []).map((l: any) => ({
-            ...l,
-            id: Math.random().toString(36).substring(2, 9),
-            timestamp: new Date().toLocaleTimeString('en-US', { hour12: false }),
-          })),
-        }));
-        setAgents(prev => {
-          // Merge: update existing, add new, keep agents not in init (they may still be connected)
-          const merged = new Map(prev.map(a => [a.id, a]));
-          for (const a of serverAgents) {
-            const existing = merged.get(a.id);
-            merged.set(a.id, existing ? { ...existing, state: a.state, confidence: a.confidence, reasoning: a.reasoning } : a);
-          }
-          return Array.from(merged.values());
-        });
-        // Auto-select first agent if none selected
-        if (Object.keys(states).length > 0) {
-          setSelectedAgentId(prev => prev || Object.keys(states)[0]);
-        }
-      } else if (data.type === "agent_disconnected") {
-        const disconnectedId = data.agent_id;
-        setAgents(prev => prev.filter(a => a.id !== disconnectedId));
-        setSelectedAgentId(prev => prev === disconnectedId ? "" : prev);
-      } else if (data.type === "frame_update") {
-        setAgents(prev => prev.map(agent => 
-          agent.id === data.agent_id ? { ...agent, frame: data.frame } : agent
-        ));
-      } else if (data.type === "terminal_screen_update") {
-        setAgents(prev => prev.map(agent => 
-          agent.id === data.agent_id ? { ...agent, ptyScreen: data.screen } : agent
-        ));
-      } else if (data.type === "log_update") {
-        setAgents(prev => prev.map(agent => {
-          if (agent.id === data.agent_id) {
-            const log: LogLine = {
-              id: Math.random().toString(36).substring(2, 9),
-              timestamp: new Date().toLocaleTimeString('en-US', { hour12: false }),
-              text: data.log.text,
-              type: data.log.type || "info",
-            };
-            return {
-              ...agent,
-              logs: [...agent.logs, log].slice(-50)
-            };
-          }
-          return agent;
-        }));
-      } else if (data.type === "update") {
-        const agentId = data.agent_id;
-        const vlmData = data.data;
-        
-        setAgents(prev => prev.map(agent => {
-          if (agent.id === agentId) {
-            const newLog: LogLine = {
-              id: Math.random().toString(36).substring(2, 9),
-              timestamp: new Date().toLocaleTimeString('en-US', { hour12: false }),
-              text: `[VLM] ${vlmData.reasoning || `State updated to ${vlmData.agent_state}`}`,
-              type: vlmData.agent_state === "PROGRESSING" ? "info" : "warn"
-            };
-            
-            return {
-              ...agent,
-              state: vlmData.agent_state,
-              confidence: vlmData.confidence_score || agent.confidence,
-              reasoning: vlmData.reasoning,
-              logs: [...agent.logs, newLog].slice(-20)
-            };
-          }
-          return agent;
-        }));
-      }
-    };
-
-    ws.onclose = () => {
-      console.log("Disconnected from Argus Server");
-    };
-
-    return () => {
-      ws.close();
-    };
-  }, []);
-
-  useEffect(() => {
-    // Scroll to bottom of logs for selected agent
     logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [agents, selectedAgentId]);
 
-  const selectedAgent = agents.find(a => a.id === selectedAgentId);
-
-  const sendCommand = (action: string) => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && selectedAgent) {
-      const msg: Record<string, string> = { type: "command", agent_id: selectedAgent.id, action };
-      if (action === "inject" && injectRef.current) {
-        msg.content = injectRef.current.value;
-        injectRef.current.value = "";
-      }
-      wsRef.current.send(JSON.stringify(msg));
+  const handleSendCommand = (action: string) => {
+    if (action === "inject" && injectRef.current) {
+      sendCommand(action, injectRef.current.value);
+      injectRef.current.value = "";
+    } else {
+      sendCommand(action);
     }
   };
 
@@ -174,7 +51,7 @@ export default function Dashboard() {
           <h3 style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>ACTIVE AGENTS</h3>
           <div className={styles.activeAgentsList}>
             {agents.map(agent => (
-              <div 
+              <div
                 key={agent.id}
                 onClick={() => setSelectedAgentId(agent.id)}
                 className={`${styles.agentListItem} ${selectedAgentId === agent.id ? styles.selected : ''} ${agent.state === 'DANGEROUS' ? styles.danger : ''} ${agent.state === 'STUCK' ? styles.warning : ''}`}
@@ -202,13 +79,13 @@ export default function Dashboard() {
                 <span>Target: <span className="glow-text">{selectedAgent.id}</span></span>
              </div>
              <div className={styles.controls}>
-               <button className={styles.btn} onClick={() => sendCommand("pause")}>
+               <button className={styles.btn} onClick={() => handleSendCommand("pause")}>
                  <Pause size={14} /> Pause
                </button>
-               <button className={styles.btn} onClick={() => sendCommand("resume")}>
+               <button className={styles.btn} onClick={() => handleSendCommand("resume")}>
                  <Play size={14} /> Resume
                </button>
-               <button className={`${styles.btn} ${styles.danger}`} onClick={() => sendCommand("kill")}>
+               <button className={`${styles.btn} ${styles.danger}`} onClick={() => handleSendCommand("kill")}>
                  <XCircle size={14} /> Kill
                </button>
              </div>
@@ -218,7 +95,7 @@ export default function Dashboard() {
                  className={styles.textarea}
                  placeholder={`Inject context or instructions to ${selectedAgent.id}...`}
                ></textarea>
-               <button className={styles.btn} style={{ width: '100%' }} onClick={() => sendCommand("inject")}>
+               <button className={styles.btn} style={{ width: '100%' }} onClick={() => handleSendCommand("inject")}>
                  <Send size={14} /> Inject Prompt
                </button>
              </div>
@@ -237,8 +114,8 @@ export default function Dashboard() {
              </div>
            )}
            {agents.map(agent => (
-             <div 
-               key={agent.id} 
+             <div
+               key={agent.id}
                className={`glass-panel ${styles.agentCard} ${agent.state === 'DANGEROUS' ? styles.cardDanger : ''} ${agent.state === 'STUCK' ? styles.cardWarning : ''}`}
              >
                {agent.state === 'DANGEROUS' && (
@@ -266,7 +143,7 @@ export default function Dashboard() {
                    </span>
                  </div>
                </div>
-               
+
                <div style={{ padding: '0.5rem 1rem', fontSize: '0.8rem', borderBottom: '1px solid var(--panel-border)', display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)' }}>
                   <span>Task: {agent.task}</span>
                </div>
@@ -278,10 +155,10 @@ export default function Dashboard() {
                      {agent.ptyScreen}
                    </pre>
                  ) : agent.frame ? (
-                   <img 
-                     src={`data:image/jpeg;base64,${agent.frame}`} 
-                     alt={`Live feed of ${agent.id}`} 
-                     style={{ width: '100%', height: '100%', objectFit: 'contain' }} 
+                   <img
+                     src={`data:image/jpeg;base64,${agent.frame}`}
+                     alt={`Live feed of ${agent.id}`}
+                     style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                    />
                  ) : (
                    <div className={styles.visualPlaceholder}>

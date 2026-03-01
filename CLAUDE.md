@@ -24,6 +24,12 @@ bun run probe.ts -- python3 my_agent.py
 # Build / lint
 bun run build
 bun run lint
+
+# Run tests
+bun test                    # all tests
+bun run test:unit           # unit tests only
+bun run test:integration    # integration tests only
+bun run test:coverage       # with coverage report
 ```
 
 Start order: hub → probe → dashboard.
@@ -72,16 +78,21 @@ All in `.env.example`. Key ones:
 - `ARGUS_VISION_URL` / `ARGUS_VISION_MODEL` / `ARGUS_VISION_KEY` — Vision model for tier2 (defaults to VLM values)
 - `ARGUS_AGENT_ID` — Agent identifier (default: `A-01`)
 - `ARGUS_FRAME_INTERVAL` — Frame capture interval in ms (default: `2000`)
+- `NEXT_PUBLIC_HUB_URL` — Dashboard WebSocket base URL (default: `ws://localhost:8000`)
 
 ## Key Files
 
-- `hub.ts` — WebSocket relay with agent registry and command routing
-- `probe.ts` — PTY + two-tier VLM monitoring pipeline
+- `hub.ts` — WebSocket relay with agent registry and command routing (`createHub()` factory)
+- `probe.ts` — VLM monitoring pipeline (connects to hub, spawns child process)
+- `probe-utils.ts` — Pure functions extracted from probe (screen buffers, JSON extraction, command handler, pipeStream)
+- `src/app/useAgentSocket.ts` — Custom hook for dashboard WebSocket + `applyMessage()` pure function
 - `demo_agent.ts` — Simulated SWE-agent that loops into failure (for demos)
 - `src/app/page.tsx` — Dashboard UI (CRT terminal aesthetic)
 - `src/app/globals.css` — Dark theme with scanlines, green-on-black
 - `docs/architecture.md` — Full system design vision (Rust daemon, cloud, SaaS)
 - `docs/plan.md` — Multi-phase roadmap
+- `tests/unit/` — Unit tests (extract-json, screen-buffer, hub, handle-command, pipe-stream, anomaly-detection, apply-message)
+- `tests/integration/` — Integration test (full hub pipeline lifecycle)
 
 ## Tech Stack
 

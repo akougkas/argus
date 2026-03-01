@@ -8,7 +8,11 @@
     "dev:probe": "bun run probe.ts",
     "build": "bunx --bun next build",
     "start": "bunx --bun next start",
-    "lint": "bunx eslint"
+    "lint": "bunx eslint",
+    "test": "bun test",
+    "test:unit": "bun test tests/unit",
+    "test:integration": "bun test tests/integration",
+    "test:coverage": "bun test --coverage"
   },
   "dependencies": {
     "ansi-to-svg": "^1.4.3",

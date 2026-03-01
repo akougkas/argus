@@ -1,6 +1,18 @@
 import { OpenAI } from "openai";
-import ansiToSvg from "ansi-to-svg";
-import sharp from "sharp";
+import {
+  extractJSON,
+  getScreen,
+  getScreenHistory,
+  pushScreenHistory,
+  getFrameBuffer,
+  pushFrame,
+  captureFrame,
+  compositeGrid,
+  handleCommand,
+  pipeStream,
+  resetState,
+  type CommandPayload,
+} from "./probe-utils";
 
 // ---------------------------------------------------------------------------
 // Configuration (all from env vars or CLI args)
@@ -17,7 +29,6 @@ const VISION_KEY = process.env.ARGUS_VISION_KEY || VLM_KEY;
 const FAST_INTERVAL = parseInt(process.env.ARGUS_FAST_INTERVAL || "1000");
 const SCREEN_INTERVAL = parseInt(process.env.ARGUS_SCREEN_INTERVAL || "100");
 const FRAME_INTERVAL = parseInt(process.env.ARGUS_FRAME_INTERVAL || "2000");
-const SCREEN_ROWS = 24;
 
 // CLI: `bun run probe.ts -- python3 my_agent.py`  (default: demo_agent.ts)
 const cliArgs = process.argv.slice(2);
@@ -27,14 +38,11 @@ const openai = new OpenAI({ baseURL: VLM_URL, apiKey: VLM_KEY });
 const visionClient = new OpenAI({ baseURL: VISION_URL, apiKey: VISION_KEY });
 
 // llama.cpp extension: disable thinking/reasoning mode for models that support it
-// (e.g. Qwen3.5). Without this, thinking tokens consume the entire budget.
 const LLAMA_CPP_NO_THINK = { chat_template_kwargs: { enable_thinking: false } };
 
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
-
-const ANSI_RE = /\x1B(?:[@-Z\-_]|\[[0-?]*[ -/]*[@-~])/g;
 
 let ws: WebSocket;
 let childProc: ReturnType<typeof Bun.spawn> | null = null;
@@ -42,20 +50,14 @@ let probeStarted = false;
 let isDeepReasoning = false;
 let isFastPerceptionRunning = false;
 let lastBroadcastedScreen = "";
-let screenHistory: string[] = [];
 
-// Rolling line buffer — the "screen" is the last SCREEN_ROWS lines
-let screenLines: string[] = [];
+// Timer IDs for cleanup
+let screenIntervalId: ReturnType<typeof setInterval> | null = null;
+let frameIntervalId: ReturnType<typeof setInterval> | null = null;
+let tier1IntervalId: ReturnType<typeof setInterval> | null = null;
 
-// Raw ANSI line buffer — preserves escape codes for visual pipeline
-let rawScreenLines: string[] = [];
-
-// JPEG frame buffer for vision tier2
-const frameBuffer: Buffer[] = [];
-
-// Reconnection backoff
-let reconnectDelay = 1000;
-const MAX_RECONNECT_DELAY = 30000;
+// Frame capture failure tracking
+let consecutiveFrameFailures = 0;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -71,149 +73,10 @@ function sendLog(text: string, type: string = "info") {
   send({ type: "log_update", agent_id: AGENT_ID, log: { text, type } });
 }
 
-function extractJSON(text: string): any | null {
-  try { return JSON.parse(text); } catch {}
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-  if (fenced) try { return JSON.parse(fenced[1]); } catch {}
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start !== -1 && end > start) {
-    try { return JSON.parse(text.substring(start, end + 1)); } catch {}
-  }
-  return null;
-}
-
-function getScreen(): string {
-  return screenLines.slice(-SCREEN_ROWS).join("\n");
-}
-
-function pushLine(line: string) {
-  screenLines.push(line);
-  // Keep bounded (2x screen for scrollback context)
-  if (screenLines.length > SCREEN_ROWS * 2) {
-    screenLines = screenLines.slice(-SCREEN_ROWS * 2);
-  }
-}
-
-function pushRawLine(line: string) {
-  rawScreenLines.push(line);
-  if (rawScreenLines.length > SCREEN_ROWS * 2) {
-    rawScreenLines = rawScreenLines.slice(-SCREEN_ROWS * 2);
-  }
-}
-
-function getRawScreen(): string {
-  return rawScreenLines.slice(-SCREEN_ROWS).join("\n");
-}
-
-// ---------------------------------------------------------------------------
-// Visual pipeline — ANSI → SVG → JPEG
-// ---------------------------------------------------------------------------
-
-async function captureFrame(): Promise<string> {
-  const rawAnsi = getRawScreen();
-  if (!rawAnsi.trim()) return "";
-
-  const svg = ansiToSvg(rawAnsi, {
-    fontFace: "JetBrains Mono, Courier",
-    fontSize: 14,
-    lineHeight: 18,
-    colors: {
-      backgroundColor: "#0a0a0a",
-      foregroundColor: "#00ff41",
-    },
-  });
-
-  const jpeg = await sharp(Buffer.from(svg))
-    .resize(960, 540, { fit: "contain", background: "#0a0a0a" })
-    .jpeg({ quality: 60 })
-    .toBuffer();
-
-  return jpeg.toString("base64");
-}
-
-async function compositeGrid(frames: Buffer[]): Promise<string> {
-  const cellW = 480, cellH = 270;
-
-  // Resize all frames to cell size
-  const resized = await Promise.all(
-    frames.slice(-4).map(f =>
-      sharp(f).resize(cellW, cellH, { fit: "contain", background: "#0a0a0a" }).toBuffer()
-    )
-  );
-
-  // Pad to 4 with black cells if fewer frames
-  while (resized.length < 4) {
-    const blank = await sharp({
-      create: { width: cellW, height: cellH, channels: 3, background: { r: 10, g: 10, b: 10 } },
-    }).jpeg().toBuffer();
-    resized.unshift(blank);
-  }
-
-  const grid = await sharp({
-    create: { width: 960, height: 540, channels: 3, background: { r: 0, g: 0, b: 0 } },
-  })
-    .composite([
-      { input: resized[0], top: 0, left: 0 },
-      { input: resized[1], top: 0, left: cellW },
-      { input: resized[2], top: cellH, left: 0 },
-      { input: resized[3], top: cellH, left: cellW },
-    ])
-    .jpeg({ quality: 70 })
-    .toBuffer();
-
-  return grid.toString("base64");
-}
-
-// ---------------------------------------------------------------------------
-// Command handler (pause / kill / inject from dashboard via hub)
-// ---------------------------------------------------------------------------
-
-function handleCommand(msg: any) {
-  if (!childProc) {
-    console.warn("[probe] No active process to command");
-    return;
-  }
-
-  switch (msg.action) {
-    case "pause":
-      try {
-        process.kill(childProc.pid, "SIGSTOP");
-        sendLog("Agent paused (SIGSTOP)", "system");
-        console.log(`[probe] SIGSTOP → PID ${childProc.pid}`);
-      } catch (e) {
-        console.error("[probe] Failed to pause:", e);
-      }
-      break;
-
-    case "resume":
-      try {
-        process.kill(childProc.pid, "SIGCONT");
-        sendLog("Agent resumed (SIGCONT)", "system");
-        console.log(`[probe] SIGCONT → PID ${childProc.pid}`);
-      } catch (e) {
-        console.error("[probe] Failed to resume:", e);
-      }
-      break;
-
-    case "kill":
-      try {
-        childProc.kill(9);
-        sendLog("Agent killed (SIGKILL)", "system");
-        console.log(`[probe] SIGKILL → PID ${childProc.pid}`);
-      } catch (e) {
-        console.error("[probe] Failed to kill:", e);
-      }
-      break;
-
-    case "inject":
-      if (msg.content && childProc.stdin && typeof childProc.stdin !== "number") {
-        childProc.stdin.write(msg.content + "\n");
-        sendLog(`Injected: ${msg.content}`, "system");
-        console.log(`[probe] Injected: ${msg.content}`);
-      }
-      break;
-  }
+function clearIntervals() {
+  if (screenIntervalId) { clearInterval(screenIntervalId); screenIntervalId = null; }
+  if (frameIntervalId) { clearInterval(frameIntervalId); frameIntervalId = null; }
+  if (tier1IntervalId) { clearInterval(tier1IntervalId); tier1IntervalId = null; }
 }
 
 // ---------------------------------------------------------------------------
@@ -236,51 +99,55 @@ async function startProbe() {
     });
   } catch (e) {
     console.error(`[probe] Failed to spawn:`, e);
+    sendLog(`Failed to spawn: ${e instanceof Error ? e.message : String(e)}`, "error");
     probeStarted = false;
     return;
   }
 
   // Read stdout and stderr streams
-  pipeStream(childProc.stdout as ReadableStream<Uint8Array> | null, "stdout");
-  pipeStream(childProc.stderr as ReadableStream<Uint8Array> | null, "stderr");
+  pipeStream(childProc.stdout as ReadableStream<Uint8Array> | null, "stdout", sendLog);
+  pipeStream(childProc.stderr as ReadableStream<Uint8Array> | null, "stderr", sendLog);
 
   // Wait for exit
   childProc.exited.then((code) => {
     console.log(`[probe] Agent exited with code ${code}`);
     sendLog(`Agent exited (code ${code})`, "system");
+    clearIntervals();
     childProc = null;
     probeStarted = false;
   });
 
-  // Screen broadcast loop — sends the rolling line buffer as terminal screen
-  setInterval(() => {
+  // Screen broadcast loop
+  screenIntervalId = setInterval(() => {
     const screen = getScreen();
     if (screen && screen !== lastBroadcastedScreen) {
       send({ type: "terminal_screen_update", agent_id: AGENT_ID, screen });
       lastBroadcastedScreen = screen;
-      screenHistory.push(screen);
-      if (screenHistory.length > 10) screenHistory.shift();
+      pushScreenHistory(screen);
     }
   }, SCREEN_INTERVAL);
 
-  // Frame capture loop — ANSI → SVG → JPEG for visual pipeline + dashboard
-  setInterval(async () => {
+  // Frame capture loop
+  frameIntervalId = setInterval(async () => {
     try {
       const frame = await captureFrame();
       if (frame) {
         const buf = Buffer.from(frame, "base64");
-        frameBuffer.push(buf);
-        if (frameBuffer.length > 10) frameBuffer.shift();
-        // Stream latest frame to dashboard
+        pushFrame(buf);
         send({ type: "frame_update", agent_id: AGENT_ID, frame });
+        consecutiveFrameFailures = 0;
       }
-    } catch {
-      // Silently skip frame capture failures (non-critical)
+    } catch (e: unknown) {
+      consecutiveFrameFailures++;
+      if (consecutiveFrameFailures === 5) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.warn(`[probe] Frame capture failing repeatedly (5x): ${msg}`);
+      }
     }
   }, FRAME_INTERVAL);
 
-  // Tier 1: Fast perception loop (text-based, unchanged)
-  setInterval(async () => {
+  // Tier 1: Fast perception loop
+  tier1IntervalId = setInterval(async () => {
     if (isDeepReasoning || isFastPerceptionRunning) return;
     isFastPerceptionRunning = true;
 
@@ -304,12 +171,14 @@ async function startProbe() {
           temperature: 0,
           max_tokens: 10,
           ...LLAMA_CPP_NO_THINK,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } as any,
         { signal: controller.signal },
       );
       clearTimeout(timeout);
 
-      const result = response.choices[0]?.message?.content?.trim().toUpperCase() || "";
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const result = (response as any).choices[0]?.message?.content?.trim().toUpperCase() || "";
       console.log(`[tier1] ${result}`);
 
       const isAnomaly =
@@ -343,64 +212,17 @@ async function startProbe() {
           },
         });
       }
-    } catch (e: any) {
-      if (e.name === "AbortError") {
+    } catch (e: unknown) {
+      if (e instanceof Error && e.name === "AbortError") {
         console.log("[tier1] Timeout");
       } else {
-        console.error("[tier1] Error:", e.message);
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error("[tier1] Error:", msg);
       }
     } finally {
       isFastPerceptionRunning = false;
     }
   }, FAST_INTERVAL);
-}
-
-// ---------------------------------------------------------------------------
-// Stream reader — pipes subprocess output into screen buffer + log lines
-// ---------------------------------------------------------------------------
-
-async function pipeStream(stream: ReadableStream<Uint8Array> | null | undefined, label: string) {
-  if (!stream) return;
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let lineBuffer = "";
-  let rawLineBuffer = "";
-
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-
-      const raw = decoder.decode(value, { stream: true });
-      const clean = raw.replace(ANSI_RE, "");
-
-      lineBuffer += clean;
-      rawLineBuffer += raw;
-
-      // Process stripped lines → screen buffer + log lines
-      let idx;
-      while ((idx = lineBuffer.indexOf("\n")) !== -1) {
-        const line = lineBuffer.slice(0, idx).trim();
-        lineBuffer = lineBuffer.slice(idx + 1);
-        if (line) {
-          pushLine(line);
-          const isError = label === "stderr" || /error|exception|fatal|✖/i.test(line);
-          sendLog(line, isError ? "error" : "info");
-        }
-      }
-
-      // Process raw ANSI lines → visual pipeline buffer
-      while ((idx = rawLineBuffer.indexOf("\n")) !== -1) {
-        const rawLine = rawLineBuffer.slice(0, idx);
-        rawLineBuffer = rawLineBuffer.slice(idx + 1);
-        if (rawLine.trim()) {
-          pushRawLine(rawLine);
-        }
-      }
-    }
-  } catch {
-    // Stream closed
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -423,11 +245,11 @@ Reply ONLY with a raw, valid JSON object:
     const timeout = setTimeout(() => controller.abort(), 45000);
 
     let response;
+    const fb = getFrameBuffer();
 
-    if (frameBuffer.length >= 2) {
-      // Vision mode: composite recent frames into 2x2 temporal grid
-      console.log(`[tier2] Vision mode — ${frameBuffer.length} frames available`);
-      const gridBase64 = await compositeGrid(frameBuffer.slice(-4));
+    if (fb.length >= 2) {
+      console.log(`[tier2] Vision mode — ${fb.length} frames available`);
+      const gridBase64 = await compositeGrid(fb.slice(-4));
 
       response = await visionClient.chat.completions.create(
         {
@@ -441,13 +263,13 @@ Reply ONLY with a raw, valid JSON object:
           }],
           temperature: 0,
           max_tokens: 300,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } as any,
         { signal: controller.signal },
       );
     } else {
-      // Text fallback: same as before
       console.log("[tier2] Text fallback mode");
-      const history = screenHistory.slice(-4).join("\n\n--- PREVIOUS FRAME ---\n\n");
+      const history = getScreenHistory().slice(-4).join("\n\n--- PREVIOUS FRAME ---\n\n");
 
       response = await openai.chat.completions.create(
         {
@@ -456,13 +278,15 @@ Reply ONLY with a raw, valid JSON object:
           temperature: 0,
           max_tokens: 300,
           ...LLAMA_CPP_NO_THINK,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } as any,
         { signal: controller.signal },
       );
     }
     clearTimeout(timeout);
 
-    const rawText = response.choices[0]?.message?.content?.trim() || "";
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rawText = (response as any).choices[0]?.message?.content?.trim() || "";
     console.log(`[tier2] Raw: ${rawText.substring(0, 120)}...`);
 
     const result = extractJSON(rawText);
@@ -472,11 +296,12 @@ Reply ONLY with a raw, valid JSON object:
     } else {
       console.error("[tier2] Failed to extract JSON from response");
     }
-  } catch (e: any) {
-    if (e.name === "AbortError") {
+  } catch (e: unknown) {
+    if (e instanceof Error && e.name === "AbortError") {
       console.log("[tier2] Timeout (45s)");
     } else {
-      console.error("[tier2] Error:", e.message);
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("[tier2] Error:", msg);
     }
   } finally {
     isDeepReasoning = false;
@@ -486,6 +311,9 @@ Reply ONLY with a raw, valid JSON object:
 // ---------------------------------------------------------------------------
 // WebSocket connection with exponential backoff
 // ---------------------------------------------------------------------------
+
+let reconnectDelay = 1000;
+const MAX_RECONNECT_DELAY = 30000;
 
 function connect() {
   ws = new WebSocket(HUB_URL);
@@ -498,13 +326,14 @@ function connect() {
   };
 
   ws.onmessage = (event) => {
-    let msg: any;
+    let msg: CommandPayload;
     try {
       msg = JSON.parse(event.data as string);
     } catch {
+      console.warn("[probe] Received malformed JSON from hub");
       return;
     }
-    if (msg.type === "command") handleCommand(msg);
+    if (msg.type === "command") handleCommand(msg, childProc, sendLog);
   };
 
   ws.onerror = () => {
@@ -518,5 +347,13 @@ function connect() {
   };
 }
 
-console.log(`[probe] Argus Probe — agent=${AGENT_ID} cmd="${SPAWN_CMD.join(" ")}"`);
-connect();
+// ---------------------------------------------------------------------------
+// Top-level — only when run directly
+// ---------------------------------------------------------------------------
+
+if (import.meta.main) {
+  console.log(`[probe] Argus Probe — agent=${AGENT_ID} cmd="${SPAWN_CMD.join(" ")}"`);
+  connect();
+}
+
+export { connect, startProbe, resetState };
