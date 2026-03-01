@@ -1,202 +1,162 @@
-# Session: v0.3.0 — Persistence + PTY Foundation
+# Session: v0.3.0 — Persistence + PTY Foundation (Continuation)
 
 ## Context
 
-v0.2.1 committed (not tagged — incremental restructure). 101 tests, 0 failures. Lint/build clean.
+**Previous session accomplished:**
+- v0.2.1 tagged (restructure + ANSI hardening)
+- v0.2.2 tagged (pre-persistence hub hardening: metadata, connected flag, preserve-on-disconnect)
+- Track A (PTY) complete and committed (not tagged — WIP toward v0.3.0)
+- Track C (Agent Metadata) complete — done as part of v0.2.2
 
-**What was accomplished:**
-- v0.1.0: Testable foundation — factories, unit/integration tests, CI
-- v0.2.0: Multi-agent reliability — graceful shutdown, reconnection, inline ANSI→SVG, rate limiting
-- v0.2.1: Project restructured into `src/` layout, ANSI parser hardened for TUI (reverse video, italic, expanded escape stripping)
+**Current state:** 126 tests, 0 failures, 12 test files. Lint clean (1 pre-existing img warning). Build clean.
 
-**Key breakthrough discovered during planning:** `script -qefc "cmd" /dev/null` allocates a real PTY via Bun.spawn (zero native addons). Combined with `@xterm/headless` v6.0.0 (zero deps), this gives proper 2D terminal grid capture for TUI apps — solving the pipe-vs-PTY limitation without node-pty.
+**Git log (most recent first):**
+```
+4779802 v0.3.0 WIP: PTY foundation (Track A complete)
+6291d93 v0.2.2: Pre-persistence hub hardening  ← tagged v0.2.2
+41082ba v0.3.0–v0.5.0 roadmap + repository organization
+9aa4006 Restructure project into src/ layout    ← tagged v0.2.1
+```
 
-## Version Map
+## What's Done
 
-| Version | Milestone | Status |
-|---------|-----------|--------|
-| v0.1.0 | Testable Foundation | Done, tagged |
-| v0.2.0 | Multi-Agent Reliability | Done, tagged |
-| v0.2.1 | Restructure + ANSI Hardening | Done, committed |
-| **v0.3.0** | **Persistence + PTY Foundation** | **This session** |
-| v0.4.0 | Semantic Integration + Actuation | Planned |
-| v0.5.0 | Beta: Monitors AWOC in Production | Planned |
-
-## v0.3.0 Deliverables
-
-### Track A: PTY Integration
-- [ ] `bun add @xterm/headless`
-- [ ] `src/probe/terminal.ts` — wraps `@xterm/headless` Terminal
-  - `createTerminal(cols=80, rows=24)` → `TerminalWrapper`
-  - `write(data)` — feed raw PTY bytes
-  - `getGrid()` → `{ text: string, ansi: string }` — plain text + reconstructed SGR
-  - SGR reconstruction: walk cells, track style changes, emit escape codes on transitions
-  - Pure module, no WebSocket/process concerns
-- [ ] `pipeToTerminal(stream, terminal, sendLog)` in `probe-utils.ts`
-- [ ] PTY mode in `probe.ts` behind `ARGUS_PTY=1` flag
+### Track A: PTY Integration — COMPLETE
+- [x] `@xterm/headless` v6.0.0 installed (zero deps)
+- [x] `src/probe/terminal.ts` — headless xterm wrapper with SGR reconstruction
+  - `createTerminal(cols, rows)` → `TerminalWrapper`
+  - `write(data)` → Promise (uses callback internally for reliable processing)
+  - `getGrid()` → `{ text, ansi }` — plain text + reconstructed SGR codes
+  - Supports: 16-color, 256-color, bold, dim, italic, underline, inverse, background
+  - Requires `allowProposedApi: true` for buffer access
+  - 100% function coverage, 95% line coverage
+- [x] `pipeToTerminal(stream, terminal, sendLog)` in `probe-utils.ts`
+- [x] PTY mode in `probe.ts` behind `ARGUS_PTY=1`
   - Wraps command: `script -qefc "stty rows R cols C 2>/dev/null; exec CMD" /dev/null`
   - Sets `TERM=xterm-256color` in spawn env
-  - Screen broadcast: `terminal.getGrid().text` instead of `getScreen()`
-  - Frame capture: `terminal.getGrid().ansi` fed to `ansiToSvg()`
+  - Screen broadcast from `terminal.getGrid().text`
+  - Frame capture from `terminal.getGrid().ansi` → `captureFrameFromGrid()` (inline in probe.ts)
+  - Tier2 text fallback reads from terminal grid in PTY mode
+  - Reconnect re-sends terminal grid in PTY mode
+  - Terminal disposed on child exit
   - Pipe mode (default) completely unchanged
-- [ ] `tests/unit/probe/terminal.test.ts` (~10 tests)
-- [ ] `tests/integration/pty-pipeline.test.ts` (~3 tests)
+- [x] 17 terminal unit tests + 3 PTY integration tests
 
-### Track B: SQLite Persistence
-- [ ] `src/hub/db.ts` using `bun:sqlite`
-  - `createDb(path?)` → `DbInstance`
-  - Schema: `agents` (id, state, confidence, reasoning, task, command, start_time, last_seen), `logs` (id, agent_id, text, type, timestamp), `vlm_events` (id, agent_id, state, confidence, reasoning, timestamp)
-  - Indexed on `(agent_id, timestamp)`
-  - `:memory:` for tests, file path for production
-  - No frames table in v0.3.0
-- [ ] Hub integration: `createHub(port, dbPath?)`
-  - On register: `db.insertAgent()` (upsert)
-  - On vlm_update: `db.insertVlmEvent()` + `db.updateAgentState()`
-  - On log_update: `db.insertLog()`
-  - On startup: `db.getAllAgents()` preloads agents map
-- [ ] HTTP API endpoints in hub `fetch()`:
+### Track C: Agent Metadata — COMPLETE (done in v0.2.2)
+- [x] `register` message accepts `metadata: { task, command, start_time }`
+- [x] Probe reads `ARGUS_AGENT_TASK`, sends command + start_time
+- [x] Hub `AgentState` has `task`, `command`, `startTime`, `lastSeen`, `connected`
+- [x] Hub preserves agents on disconnect (`connected: false`)
+- [x] Hub `init` sends only connected agents
+- [x] Hub health counts only connected agents
+- [x] Dashboard `applyMessage()` populates task from init data
+- [x] 5 new hub tests for metadata, reconnect, health counts, init filtering
+
+## What Remains
+
+### Track B: SQLite Persistence — NOT STARTED
+This is the main work for this session.
+
+**Step 6: Create `src/hub/db.ts` + `tests/unit/hub/db.test.ts`**
+- Use `bun:sqlite` (built-in, no dependency)
+- `createDb(path?)` → `DbInstance`
+- Schema:
+  ```sql
+  CREATE TABLE agents (
+    id TEXT PRIMARY KEY, state TEXT, confidence REAL, reasoning TEXT,
+    task TEXT, command TEXT, start_time INTEGER, last_seen INTEGER
+  );
+  CREATE TABLE logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT, text TEXT,
+    type TEXT, timestamp INTEGER
+  );
+  CREATE INDEX idx_logs_agent_ts ON logs(agent_id, timestamp);
+  CREATE TABLE vlm_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT, state TEXT,
+    confidence REAL, reasoning TEXT, timestamp INTEGER
+  );
+  CREATE INDEX idx_vlm_agent_ts ON vlm_events(agent_id, timestamp);
+  ```
+- Methods: `insertAgent()`, `updateAgentState()`, `insertLog()`, `insertVlmEvent()`, `getAllAgents()`, `getAgentHistory()`, `getAgentLogs()`
+- `:memory:` for tests, file path for production (`ARGUS_DB_PATH`)
+- WAL mode, foreign keys ON
+- ~10 tests: CRUD, pagination (limit/offset/since), upsert, chronological ordering
+
+**Step 7: Integrate db.ts into `src/hub/hub.ts` + HTTP API**
+- `createHub(port, dbPath?)` — optionally creates DbInstance
+- Wire into message handlers:
+  - `register` → `db.insertAgent()` (upsert)
+  - `vlm_update` → `db.insertVlmEvent()` + `db.updateAgentState()`
+  - `log_update` → `db.insertLog()`
+  - On startup: `db.getAllAgents()` preloads agents map (survived restart)
+- HTTP API in `fetch()`:
   - `GET /api/agents` — all agents (including disconnected)
-  - `GET /api/agents/:id/history` — paginated timeline
+  - `GET /api/agents/:id/history` — paginated VLM event timeline
   - `GET /api/agents/:id/logs` — paginated logs with `?type=` filter
   - Query params: `limit=100`, `offset=0`, `since=<timestamp>`
-- [ ] `tests/unit/hub/db.test.ts` (~10 tests)
-- [ ] Extended integration tests for persistence + HTTP API
+  - Return JSON with `Content-Type: application/json`
 
-### Track C: Agent Metadata
-- [ ] `register` message gains optional `metadata: { task, command, start_time }`
-- [ ] Probe reads `ARGUS_AGENT_TASK`, auto-populates command from SPAWN_CMD
-- [ ] Hub `AgentState` gains `task`, `command`, `startTime` fields
-- [ ] Dashboard `applyMessage()` populates from init data
+**Step 8: Extend integration tests for persistence**
+- Test in `tests/integration/pipeline.test.ts` or new file:
+  - Register probe, send logs/VLM updates, verify data in DB
+  - Stop hub, recreate with same DB path, verify agents preloaded
+  - Test HTTP API endpoints return correct data with pagination
 
-### Track D: AWOC Phase 1 Validation
-- [ ] Wrap `awoc` (or `htop`/`vim`) with PTY mode, verify dashboard rendering
-- [ ] Verify frame capture produces readable JPEGs of TUI
-- [ ] Verify VLM analysis works against TUI content
+### Track D: AWOC Phase 1 Validation — NOT STARTED
+- Manual only — no code needed
+- `ARGUS_PTY=1 bun run src/probe/probe.ts -- htop` (or `vim`, `awoc` if available)
+- Verify dashboard renders TUI correctly, frame capture works, VLM analysis works
 
-## Implementation Order
+### Final Steps
+- Step 10: Update `ROADMAP.md` checkboxes
+- Step 12: `git tag v0.3.0`
 
-1. `bun add @xterm/headless`
-2. Create `src/probe/terminal.ts` + `tests/unit/probe/terminal.test.ts`
-3. Add `pipeToTerminal()` to `src/probe/probe-utils.ts`
-4. Wire PTY mode into `src/probe/probe.ts` (behind `ARGUS_PTY=1`)
-5. Create `tests/integration/pty-pipeline.test.ts`
-6. Create `src/hub/db.ts` + `tests/unit/hub/db.test.ts`
-7. Integrate db.ts into `src/hub/hub.ts` + add HTTP API endpoints
-8. Extend `tests/integration/pipeline.test.ts` for persistence
-9. Add agent metadata to probe register + hub AgentState + useAgentSocket
-10. Update `.env.example`, `CLAUDE.md`, `ROADMAP.md`
-11. Manual AWOC/TUI validation
-12. `git tag v0.3.0`
+## Key Technical Notes Discovered During Implementation
 
-## Key Decisions Already Made
-
-| Decision | Rationale |
-|----------|-----------|
-| PTY opt-in (`ARGUS_PTY=0` default) | Pipe mode works for most agents. PTY adds complexity only needed for TUI apps |
-| `script` command, not node-pty | Zero native addons. node-pty has SIGHUP bug under Bun |
-| `@xterm/headless` v6.0.0 | Zero deps, proper VT emulation. Previous `xterm/headless` had async write issues — v6.0.0 needs validation |
-| `terminal.ts` is pure | No WebSocket, no process spawning. Just feed bytes, get grid. Testable in isolation |
-| `bun:sqlite`, not external package | Built into Bun runtime. WAL mode for concurrent reads |
-| DB is optional (`ARGUS_DB_PATH`) | Hub works without persistence. Tests use `:memory:` |
-| No frames table in v0.3.0 | Frames are large. Visual replay deferred to v0.4.0 |
-| `createHub(port, dbPath?)` | Backward-compatible factory signature |
+- **`@xterm/headless` requires `allowProposedApi: true`** to access `buffer.active` (the grid)
+- **`write()` is async** — must use callback (`term.write(data, callback)`) or wrap in Promise for reliable reads
+- **Bold is a bitmask** — `cell.isBold()` returns `134217728` (truthy), not `true`. Use `!!cell.isBold()`
+- **PTY sends CRLF** — `\r\n` not just `\n`. The terminal emulator handles this correctly
+- **`captureFrameFromGrid()`** — inline helper in probe.ts that converts terminal ANSI → SVG → JPEG (mirrors `captureFrame()` but from grid output)
+- **Hub preserves agents on disconnect** — `agents.delete()` replaced with `connected = false` in v0.2.2. This was necessary prep for persistence.
 
 ## File Map
 
-### New Files
+### Already Created
+| File | Status |
+|------|--------|
+| `src/probe/terminal.ts` | Complete — xterm wrapper + SGR reconstruction |
+| `tests/unit/probe/terminal.test.ts` | Complete — 17 tests |
+| `tests/integration/pty-pipeline.test.ts` | Complete — 3 tests |
+
+### Still Need to Create
 | File | Purpose |
 |------|---------|
-| `src/probe/terminal.ts` | @xterm/headless wrapper with SGR reconstruction |
 | `src/hub/db.ts` | SQLite persistence layer |
-| `tests/unit/probe/terminal.test.ts` | Terminal grid tests |
-| `tests/unit/hub/db.test.ts` | DB CRUD tests |
-| `tests/integration/pty-pipeline.test.ts` | End-to-end PTY test |
+| `tests/unit/hub/db.test.ts` | DB CRUD + pagination tests |
 
-### Modified Files
+### Already Modified (this session)
 | File | Changes |
 |------|---------|
-| `src/probe/probe.ts` | PTY mode (lines ~138–180), metadata in register |
-| `src/probe/probe-utils.ts` | Add `pipeToTerminal()` |
-| `src/hub/hub.ts` | DB integration, HTTP API, metadata in AgentState |
-| `src/app/useAgentSocket.ts` | Metadata fields in applyMessage |
-| `.env.example` | New env vars |
-| `package.json` | @xterm/headless dependency |
+| `src/hub/hub.ts` | v0.2.2: metadata, connected flag, preserve-on-disconnect, connectedAgents() |
+| `src/probe/probe.ts` | PTY mode, metadata register, captureFrameFromGrid(), terminal grid in tier2/reconnect |
+| `src/probe/probe-utils.ts` | Added pipeToTerminal(), import TerminalWrapper type |
+| `src/app/useAgentSocket.ts` | v0.2.2: task from init data |
+| `.env.example` | PTY + DB + metadata env vars |
+| `CLAUDE.md` | Architecture, protocol, env vars, tech stack |
+| `ROADMAP.md` | Created (merged plan.md + progress.md) |
+| `docs/session-prompt.md` | This file |
 
-### Do NOT Touch
-| File | Reason |
-|------|--------|
-| `src/app/page.tsx` | Dashboard aesthetic is sacred — metadata display is a v0.3.0 stretch goal |
-| `src/app/globals.css` | CRT theme locked |
-| `src/probe/ansi-to-svg.ts` | No changes needed — fed reconstructed ANSI from terminal grid |
-| `src/demo/demo_agent.ts` | Works fine as-is |
+### Still Need to Modify
+| File | Changes Needed |
+|------|----------------|
+| `src/hub/hub.ts` | DB integration + HTTP API endpoints |
+| `ROADMAP.md` | Check off completed items |
 
-## Technical Notes
+## Success Criteria (Remaining)
 
-### `script` command syntax (Linux)
-```bash
-script -qefc "stty rows 24 cols 80 2>/dev/null; exec <cmd>" /dev/null
-```
-- `-q` quiet (no "Script started" banner)
-- `-e` pass through exit code
-- `-f` flush after each write
-- `-c` command to run
-- `/dev/null` typescript file (discard)
-- `stty` sets terminal dimensions inside the PTY
-- `exec` replaces shell with command (clean process tree)
-
-**macOS variant:** `script -q /dev/null <cmd>` (no `-e`, `-f`, `-c` flags — different argument order). Cross-platform support is a v0.5.0 concern.
-
-### @xterm/headless buffer API
-```typescript
-import { Terminal } from '@xterm/headless';
-const term = new Terminal({ cols: 80, rows: 24 });
-term.write(data);  // synchronous in headless mode
-const buffer = term.buffer.active;
-for (let y = 0; y < term.rows; y++) {
-  const line = buffer.getLine(y);
-  for (let x = 0; x < line.length; x++) {
-    const cell = line.getCell(x);
-    // cell.getChars(), cell.getFgColor(), cell.getBgColor(), cell.isBold(), etc.
-  }
-}
-```
-
-### bun:sqlite usage
-```typescript
-import { Database } from 'bun:sqlite';
-const db = new Database(path ?? ':memory:');
-db.exec('PRAGMA journal_mode = WAL');
-db.exec('PRAGMA foreign_keys = ON');
-// Use db.prepare() for parameterized queries
-// Use db.transaction() for atomic multi-statement ops
-```
-
-## Risks
-
-| Risk | Mitigation |
-|------|------------|
-| SGR reconstruction complexity | Start with 16 basic colors + bold/dim/underline. 256-color and RGB are stretch |
-| `script` portability (Linux vs macOS) | Linux only for v0.3.0. macOS in v0.5.0 |
-| `@xterm/headless` v6 async issues | Previous version had write issues under Bun. Test synchronous write early (step 2) |
-| SQLite write contention under high message rate | WAL mode + batch inserts if needed |
-| Hub factory signature change | `dbPath` is optional, backward-compatible |
-
-## Success Criteria
-
-- [ ] PTY mode captures TUI output (htop, vim) with correct grid layout
-- [ ] `terminal.getGrid().ansi` produces valid ANSI for ansi-to-svg
 - [ ] Hub persists agent state to SQLite, survives restart
 - [ ] HTTP API returns paginated agent history and logs
-- [ ] Agent metadata (task, command, start_time) flows probe → hub → dashboard
-- [ ] All existing tests pass + new tests (~125 total)
+- [ ] All tests pass (~130+ total after DB tests)
 - [ ] `bun run lint` clean
 - [ ] `bun run build` succeeds
 - [ ] `git tag v0.3.0`
-
-## Tech Debt Carried Forward
-
-- No authentication on hub endpoints (target: v0.5.0)
-- No frame persistence / visual replay (target: v0.4.0)
-- Dashboard frame pipeline untested in CI (target: v0.4.0)
-- macOS `script` syntax not supported (target: v0.5.0)
-- useAgentSocket low line coverage (target: v0.4.0)
