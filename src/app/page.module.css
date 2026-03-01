@@ -1,141 +1,314 @@
-.page {
-  --background: #fafafa;
-  --foreground: #fff;
-
-  --text-primary: #000;
-  --text-secondary: #666;
-
-  --button-primary-hover: #383838;
-  --button-secondary-hover: #f2f2f2;
-  --button-secondary-border: #ebebeb;
-
+.dashboard {
   display: flex;
-  min-height: 100vh;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--font-geist-sans);
-  background-color: var(--background);
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  padding: 1rem;
+  gap: 1rem;
 }
 
-.main {
+.sidebar {
+  width: 300px;
   display: flex;
-  min-height: 100vh;
-  width: 100%;
-  max-width: 800px;
   flex-direction: column;
-  align-items: flex-start;
+  gap: 1rem;
+}
+
+.mainContent {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.header {
+  display: flex;
   justify-content: space-between;
-  background-color: var(--foreground);
-  padding: 120px 60px;
+  align-items: center;
+  padding: 1rem;
 }
 
-.intro {
+.titleGroup {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  text-align: left;
-  gap: 24px;
 }
 
-.intro h1 {
-  max-width: 320px;
-  font-size: 40px;
-  font-weight: 600;
-  line-height: 48px;
-  letter-spacing: -2.4px;
-  text-wrap: balance;
-  color: var(--text-primary);
-}
-
-.intro p {
-  max-width: 440px;
-  font-size: 18px;
-  line-height: 32px;
-  text-wrap: balance;
-  color: var(--text-secondary);
-}
-
-.intro a {
-  font-weight: 500;
-  color: var(--text-primary);
-}
-
-.ctas {
+.title {
+  font-size: 1.5rem;
+  margin: 0;
   display: flex;
-  flex-direction: row;
-  width: 100%;
-  max-width: 440px;
-  gap: 16px;
-  font-size: 14px;
-}
-
-.ctas a {
-  display: flex;
-  justify-content: center;
   align-items: center;
-  height: 40px;
-  padding: 0 16px;
-  border-radius: 128px;
-  border: 1px solid transparent;
-  transition: 0.2s;
-  cursor: pointer;
-  width: fit-content;
-  font-weight: 500;
+  gap: 0.5rem;
 }
 
-a.primary {
+.subtitle {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.statusIndicator {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--text-primary);
+  box-shadow: 0 0 10px var(--text-primary);
+  animation: pulse 2s infinite;
+}
+
+.agentGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  gap: 1rem;
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 0.5rem;
+}
+
+.agentCard {
+  display: flex;
+  flex-direction: column;
+  height: 400px;
+  transition: all 0.3s ease;
+}
+
+.agentHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--panel-border);
+  background: rgba(0, 0, 0, 0.5);
+  font-size: 0.9rem;
+}
+
+.agentInfo {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.badge {
+  padding: 0.1rem 0.4rem;
+  font-size: 0.7rem;
+  border: 1px solid var(--text-primary);
+  border-radius: 2px;
+}
+
+.badge.danger {
+  color: var(--accent-danger);
+  border-color: var(--accent-danger);
+}
+
+.badge.warning {
+  color: var(--accent-warning);
+  border-color: var(--accent-warning);
+}
+
+.visualFeed {
+  flex: 1;
+  position: relative;
+  background: #000;
+  border-bottom: 1px solid var(--panel-border);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.visualPlaceholder {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.terminalFeed {
+  height: 120px;
+  padding: 0.5rem;
+  font-size: 0.8rem;
+  overflow-y: auto;
+  background: rgba(0, 10, 0, 0.8);
+  font-family: var(--font-mono);
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.logLine {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.logLine.system { color: var(--text-muted); }
+.logLine.error { color: var(--accent-danger); }
+.logLine.warn { color: var(--accent-warning); }
+
+.interventionPanel {
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.panelTitle {
+  font-size: 1rem;
+  border-bottom: 1px solid var(--panel-border);
+  padding-bottom: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.controls {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.btn {
+  flex: 1;
+  padding: 0.5rem;
+  border: 1px solid var(--text-primary);
+  color: var(--text-primary);
+  background: rgba(0, 255, 65, 0.1);
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  transition: all 0.2s;
+  text-transform: uppercase;
+}
+
+.btn:hover {
   background: var(--text-primary);
-  color: var(--background);
-  gap: 8px;
+  color: #000;
+  box-shadow: 0 0 10px var(--text-primary);
 }
 
-a.secondary {
-  border-color: var(--button-secondary-border);
+.btn.danger {
+  border-color: var(--accent-danger);
+  color: var(--accent-danger);
+  background: rgba(255, 0, 60, 0.1);
 }
 
-/* Enable hover only on non-touch devices */
-@media (hover: hover) and (pointer: fine) {
-  a.primary:hover {
-    background: var(--button-primary-hover);
-    border-color: transparent;
-  }
-
-  a.secondary:hover {
-    background: var(--button-secondary-hover);
-    border-color: transparent;
-  }
+.btn.danger:hover {
+  background: var(--accent-danger);
+  color: #000;
+  box-shadow: 0 0 10px var(--accent-danger);
 }
 
-@media (max-width: 600px) {
-  .main {
-    padding: 48px 24px;
-  }
-
-  .intro {
-    gap: 16px;
-  }
-
-  .intro h1 {
-    font-size: 32px;
-    line-height: 40px;
-    letter-spacing: -1.92px;
-  }
+.promptArea {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
 }
 
-@media (prefers-color-scheme: dark) {
-  .logo {
-    filter: invert();
-  }
+.textarea {
+  width: 100%;
+  height: 80px;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--panel-border);
+  color: var(--text-primary);
+  padding: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  resize: none;
+}
 
-  .page {
-    --background: #000;
-    --foreground: #000;
+.textarea:focus {
+  outline: none;
+  border-color: var(--text-primary);
+  box-shadow: 0 0 5px var(--text-primary);
+}
 
-    --text-primary: #ededed;
-    --text-secondary: #999;
+.activeAgentsList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  flex: 1;
+  overflow-y: auto;
+}
 
-    --button-primary-hover: #ccc;
-    --button-secondary-hover: #1a1a1a;
-    --button-secondary-border: #1a1a1a;
-  }
+.agentListItem {
+  padding: 0.5rem;
+  border-left: 2px solid var(--panel-border);
+  background: rgba(0, 0, 0, 0.3);
+  font-size: 0.8rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.agentListItem:hover, .agentListItem.selected {
+  background: rgba(0, 255, 65, 0.1);
+  border-left-color: var(--text-primary);
+}
+
+.agentListItem.danger {
+  border-left-color: var(--accent-danger);
+}
+
+.agentListItem.warning {
+  border-left-color: var(--accent-warning);
+}
+
+@keyframes pulse {
+  0% { transform: scale(0.95); opacity: 0.5; }
+  50% { transform: scale(1.1); opacity: 1; }
+  100% { transform: scale(0.95); opacity: 0.5; }
+}
+
+@keyframes flashRed {
+  0% { border-color: rgba(255, 0, 60, 0.2); }
+  50% { border-color: var(--accent-danger); box-shadow: inset 0 0 20px rgba(255, 0, 60, 0.3), 0 0 10px rgba(255, 0, 60, 0.2); }
+  100% { border-color: rgba(255, 0, 60, 0.2); }
+}
+
+@keyframes flashYellow {
+  0% { border-color: rgba(255, 176, 0, 0.2); }
+  50% { border-color: var(--accent-warning); box-shadow: inset 0 0 20px rgba(255, 176, 0, 0.3), 0 0 10px rgba(255, 176, 0, 0.2); }
+  100% { border-color: rgba(255, 176, 0, 0.2); }
+}
+
+.cardDanger {
+  animation: flashRed 2s infinite;
+}
+
+.cardWarning {
+  animation: flashYellow 2s infinite;
+}
+
+.overlayAlert {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  padding: 0.5rem 1rem;
+  background: rgba(0, 0, 0, 0.8);
+  border: 1px solid var(--accent-danger);
+  color: var(--accent-danger);
+  font-weight: bold;
+  font-size: 0.8rem;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  box-shadow: 0 0 10px rgba(255, 0, 60, 0.5);
+  animation: pulse 1s infinite;
+}
+
+.overlayAlert.warning {
+  border-color: var(--accent-warning);
+  color: var(--accent-warning);
+  box-shadow: 0 0 10px rgba(255, 176, 0, 0.5);
 }

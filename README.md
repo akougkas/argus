@@ -1,36 +1,46 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 👁️ Project Argus
 
-## Getting Started
+**"Datadog for Autonomous Agents"**
+
+As the AI industry shifts from "chatbots" to "long-horizon autonomous agents", the biggest barrier to enterprise adoption isn't intelligence; it’s trust, observability, and cost-control.
+
+**Project Argus** is a visual, real-time verification and steering layer for long-horizon AI agents, bridging the gap between autonomous execution and human oversight. It acts as a "Baby Monitor / Security Camera" paired with an Overseer Vision-Language Model (VLM).
+
+## Core Features
+*   **The "Live Cam" Dashboard:** A web UI showing a grid of live visual feeds (headless browsers, IDEs, or terminals) of all active agents.
+*   **VLM Overseer Loop:** An asynchronous background loop that feeds sampled frames to a VLM (Gemini 1.5 Flash) to evaluate states: Progressing, Looping/Stuck, Destructive Behavior, and Hallucinating.
+*   **Smart Alerting:** Webhook, Slack, or SMS notifications triggered by the VLM.
+*   **Intervention API (The Steering Wheel):** A two-way communication channel allowing the human observer to click a button to pause the agent (`SIGSTOP`), kill the process, or inject a steering prompt (LLM MITM Prompt Injection).
+*   **Time-Lapse Summaries:** Fast-forwarded video summaries of sessions with VLM-narrated chapter markers.
+
+## Architecture & Planning
+
+This repository is being built iteratively. Please see the `docs/` directory for deep-dive architectural design and our execution plan.
+
+*   [Architecture Blueprint](./docs/architecture.md): Detailed breakdown of the Telemetry, Transport, and Overseer planes.
+*   [Execution Plan](./docs/plan.md): The multi-phase approach from Local Python PoC to Rust Daemon to Cloud SaaS.
+*   [Progress Tracker](./docs/progress.md): Current status and next steps.
+
+## Repository Structure
+
+Currently, this repository holds the **Next.js Dashboard** scaffold in `src/`.
+Future additions will include the `argusd` (Rust daemon), `argus-backend` (Go/FastAPI), and `argus-probe` (Python PoC).
+
+```bash
+/
+├── docs/             # Architectural specs and planning
+├── src/              # Next.js Dashboard UI
+├── package.json
+└── README.md
+```
+
+## Getting Started (Dashboard UI)
 
 First, run the development server:
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Open [http://localhost:3000](http://localhost:3000) with your browser to see the mocked live view of the Overseer dashboard.
