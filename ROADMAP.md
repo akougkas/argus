@@ -2,6 +2,7 @@
 
 Solo dev. No users until beta. Each version is tested, verified, and tagged before moving on.
 AWOC integration phases are folded into version milestones — Argus remains a standalone product.
+Increment by patch (0.2.x) until 1.0. Each patch is a shippable, tested unit of work.
 
 ## Version Map
 
@@ -9,10 +10,14 @@ AWOC integration phases are folded into version milestones — Argus remains a s
 |---------|-----------|------------|--------|
 | v0.1.0 | Testable Foundation | — | Done, tagged |
 | v0.2.0 | Multi-Agent Reliability | — | Done, tagged |
-| v0.2.1 | Project Restructuring + ANSI Hardening | Phase 1 (parser) | Done, committed |
-| **v0.3.0** | **Persistence + PTY Foundation** | **Phase 1 (validation)** | **Done, tagged** |
-| v0.4.0 | Semantic Integration + Actuation | Phase 2–3 | Planned |
-| v0.5.0 | Beta: Monitors AWOC in Production | Phase 4 | Planned |
+| v0.2.1 | Project Restructuring + ANSI Hardening | Phase 1 (parser) | Done, tagged |
+| v0.2.2 | Pre-Persistence Hub Hardening | — | Done, tagged |
+| **v0.2.3** | **Persistence + PTY Foundation** | **Phase 1 (validation)** | **Done, tagged** |
+| v0.2.4 | Storage Layer + Frame Persistence | — | Next |
+| v0.2.5 | AWOC Semantic Integration | Phase 2–3 | Planned |
+| v0.2.6 | Actuation (auto-pause, webhooks) | — | Planned |
+| v0.2.7 | Granular Steering + Polish | Phase 4 | Planned |
+| v0.2.8 | Beta: Monitors AWOC in Production | Phase 4 | Planned |
 
 ---
 
@@ -54,9 +59,19 @@ AWOC integration phases are folded into version milestones — Argus remains a s
   - Tests for alternate screen buffer, cursor save/restore, scroll regions
 - [x] 101 tests, 0 failures (6 new ANSI parser tests)
 
+## v0.2.2 — Pre-Persistence Hub Hardening (Done)
+
+- [x] `register` message gains optional `metadata: { task, command, start_time }`
+- [x] Probe reads `ARGUS_AGENT_TASK`, auto-populates command from SPAWN_CMD
+- [x] Hub: `AgentState` gains `task`, `command`, `startTime`, `lastSeen`, `connected` fields
+- [x] Hub preserves agents on disconnect (`connected: false`)
+- [x] Hub `init` sends only connected agents; health counts only connected agents
+- [x] Dashboard: `applyMessage()` populates task from init data
+- [x] 126 tests, 0 failures
+
 ---
 
-## v0.3.0 — Persistence + PTY Foundation (Next)
+## v0.2.3 — Persistence + PTY Foundation (Done)
 
 Two independent tracks (PTY, SQLite) converging with agent metadata.
 
@@ -90,7 +105,7 @@ Uses `bun:sqlite` (built-in, no dependency).
   - `createDb(path?)` → `DbInstance`
   - Schema: `agents`, `logs`, `vlm_events` (indexed on `(agent_id, timestamp)`)
   - `:memory:` for tests, file path for production (`ARGUS_DB_PATH`)
-  - No frames table (deferred to v0.4.0)
+  - No frames table (deferred to v0.2.4)
 - [x] Hub integration: `createHub(port, dbPath?)`
   - On register: upsert agent
   - On vlm_update: insert event + update state
@@ -101,52 +116,32 @@ Uses `bun:sqlite` (built-in, no dependency).
   - `GET /api/agents/:id/history` — paginated timeline
   - `GET /api/agents/:id/logs` — paginated logs with `?type=` filter
   - Query params: `limit=100`, `offset=0`, `since=<timestamp>`
-- [x] `tests/unit/hub/db.test.ts` (~10 tests): CRUD, pagination, upsert, ordering
-- [x] Extended integration tests for persistence through restart + HTTP API
-
-### Track C: Agent Metadata
-
-- [x] `register` message gains optional `metadata: { task, command, start_time }`
-- [x] Probe reads `ARGUS_AGENT_TASK`, auto-populates command from SPAWN_CMD
-- [x] Hub: `AgentState` gains `task`, `command`, `startTime` fields
-- [x] Dashboard: `applyMessage()` populates metadata from `init`
-
-### Track D: AWOC Phase 1 Validation
-
-Manual validation after PTY works:
-- [ ] `ARGUS_PTY=1 bun run src/probe/probe.ts -- awoc` (or `htop`/`vim`)
-- [ ] Verify dashboard renders TUI correctly
-- [ ] Verify frame capture produces readable JPEGs
-- [ ] Verify VLM analysis works against TUI content
-
-### Implementation Order
-
-1. `bun add @xterm/headless`
-2. Create `src/probe/terminal.ts` + tests
-3. Add `pipeToTerminal()` to probe-utils.ts
-4. Wire PTY mode into probe.ts (behind `ARGUS_PTY=1`)
-5. Create PTY integration tests
-6. Create `src/hub/db.ts` + tests
-7. Integrate db.ts into hub.ts + HTTP API
-8. Extend integration tests for persistence
-9. Add agent metadata to probe register + hub + useAgentSocket
-10. Update `.env.example`, `CLAUDE.md`, `ROADMAP.md`
-11. Manual AWOC/TUI validation
-12. `git tag v0.3.0`
-
-### New Env Vars
-
-- `ARGUS_PTY=0` — PTY mode (0=pipe, 1=pty)
-- `ARGUS_PTY_COLS=80` — Terminal columns
-- `ARGUS_PTY_ROWS=24` — Terminal rows
-- `ARGUS_DB_PATH=` — SQLite path (empty = no persistence)
-- `ARGUS_AGENT_TASK=` — Agent task description
+- [x] `tests/unit/hub/db.test.ts` (12 tests): CRUD, pagination, upsert, ordering
+- [x] Extended integration tests for persistence through restart + HTTP API (8 tests)
 
 ### Result: 146 tests, 0 failures
 
 ---
 
-## v0.4.0 — Semantic Integration + Actuation (Planned)
+## v0.2.4 — Storage Layer + Frame Persistence (Next)
+
+Introduce `StorageLayer` abstraction and filesystem-backed frame persistence.
+Ephemeral-first: frames default to tmpfs/ramfs, flush to disk on demand.
+
+- [ ] `StorageConfig` + `StorageLayer` interface replaces `dbPath?` in `createHub()`
+- [ ] `FrameStore` — filesystem-backed JPEG storage (tmpfs ephemeral / disk persistent)
+- [ ] `frames` table in `db.ts` — metadata only (path, agent_id, timestamp, size_bytes)
+- [ ] Hub stores frames on `frame_update`, broadcasts to dashboard
+- [ ] HTTP API: `GET /api/agents/:id/frames` for historical access
+- [ ] TTL-based auto-cleanup in ephemeral mode
+- [ ] `flush()` to copy frames from tmpfs to persistent disk
+- [ ] AWOC Phase 1 manual validation (PTY mode with htop/vim)
+
+New env vars: `ARGUS_FRAME_PATH`, `ARGUS_FRAME_MODE`, `ARGUS_FRAME_TTL`
+
+See `docs/session-prompt.md` for full design.
+
+## v0.2.5 — AWOC Semantic Integration (Planned)
 
 **AWOC Phase 2–3: Semantic side-channel + synthesized verification**
 
@@ -154,33 +149,24 @@ Manual validation after PTY works:
 - [ ] Hub merges telemetry with visual state
 - [ ] Tier2 prompt enhanced: visual frames + telemetry JSON
 - [ ] Dashboard sidebar: active tool, run ID, context usage
+- [ ] State transition timeline visualization
 
-**Actuation:**
+## v0.2.6 — Actuation (Planned)
 
 - [ ] Auto-pause: configurable confidence threshold + state match + N-confirmation gate
 - [ ] `src/hub/webhooks.ts` — HTTP POST on state transitions (Slack-compatible)
-- [ ] State transition history table + dashboard timeline visualization
 
-**Optional:** Frames persistence for visual replay
+## v0.2.7 — Granular Steering + Polish (Planned)
 
-### Expected: ~150 tests
-
----
-
-## v0.5.0 — Beta: Monitors AWOC in Production (Planned)
-
-**AWOC Phase 4: Granular steering**
+**AWOC Phase 4**
 
 - [ ] Granular steering: dashboard buttons → stdin injection of `/stoprun`, `/steer`
 - [ ] Run IDs from telemetry or OCR'd from visual feed
-
-**Polish:**
-
 - [ ] `src/app/useKeyboardShortcuts.ts` — keyboard shortcuts
 - [ ] Post-mortem replay view with timeline scrubber
 - [ ] Log search/filter (client-side)
 
-**Ship:**
+## v0.2.8 — Beta (Planned)
 
 - [ ] `src/cli.ts` entry point → `bunx argus -- <cmd>`
 - [ ] Auth basics: bearer token on hub WS + HTTP
@@ -188,15 +174,13 @@ Manual validation after PTY works:
 - [ ] README rewrite with badges, screenshots
 - [ ] End-to-end: 5 simultaneous AWOC probes under Argus
 
-### Expected: ~175+ tests
-
 ---
 
 ## Technical Debt (Tracked)
 
 | Item | Introduced | Target |
 |------|-----------|--------|
-| No authentication on hub endpoints | v0.1.0 | v0.5.0 |
-| No frame persistence / visual replay | v0.2.0 | v0.4.0 |
-| Dashboard frame pipeline untested in CI | v0.1.0 | v0.4.0 |
-| useAgentSocket low line coverage (40%) | v0.2.0 | v0.4.0 |
+| No authentication on hub endpoints | v0.1.0 | v0.2.8 |
+| No frame persistence / visual replay | v0.2.0 | v0.2.4 |
+| Dashboard frame pipeline untested in CI | v0.1.0 | v0.2.4 |
+| useAgentSocket low line coverage (40%) | v0.2.0 | v0.2.5 |

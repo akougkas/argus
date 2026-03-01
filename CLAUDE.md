@@ -21,7 +21,7 @@ bun run dev:probe
 # Wrap any command instead
 bun run src/probe/probe.ts -- python3 my_agent.py
 
-# Wrap a TUI app with PTY mode (v0.3.0)
+# Wrap a TUI app with PTY mode (v0.2.3)
 ARGUS_PTY=1 bun run src/probe/probe.ts -- htop
 
 # Build / lint
@@ -45,13 +45,13 @@ Start order: hub → probe → dashboard.
                     └─── PTY mode (ARGUS_PTY=1) ┘       │            ▲  │               │
                          script -qefc + xterm/headless   │            │  │         pause/kill/inject
                                                       VLM tiers       │  └─ HTTP API ──▶ /api/*
-                                                     (Tier 1+2)       │     (v0.3.0)
+                                                     (Tier 1+2)       │     (v0.2.3)
                                                          │            │
                                                       [SQLite]────────┘
-                                                      (v0.3.0, optional)
+                                                      (v0.2.3, optional)
 ```
 
-**hub.ts** — Bun WebSocket server (:8000). Two endpoints: `/ws/probe` and `/ws/dashboard`. Probes register with `{type: "register", agent_id, metadata?}` on connect (idempotent — re-register preserves state). Hub maintains agent state and routes dashboard commands to the correct probe. Optional SQLite persistence via `db.ts` (v0.3.0) — survives restarts, provides HTTP API for history/logs. Graceful shutdown via SIGINT/SIGTERM. Port configurable via `ARGUS_HUB_PORT`.
+**hub.ts** — Bun WebSocket server (:8000). Two endpoints: `/ws/probe` and `/ws/dashboard`. Probes register with `{type: "register", agent_id, metadata?}` on connect (idempotent — re-register preserves state). Hub maintains agent state and routes dashboard commands to the correct probe. Optional SQLite persistence via `db.ts` (v0.2.3) — survives restarts, provides HTTP API for history/logs. Graceful shutdown via SIGINT/SIGTERM. Port configurable via `ARGUS_HUB_PORT`.
 
 **probe.ts** — Process wrapper + two-tier VLM pipeline. Two capture modes:
 - **Pipe mode** (default, `ARGUS_PTY=0`): Bun.spawn with piped stdout/stderr, rolling line buffer for screen state.
@@ -83,7 +83,7 @@ Handles commands from hub: SIGSTOP (pause), SIGCONT (resume), SIGKILL (kill), st
 **Dashboard → Hub → Probe:**
 - `command` — `{action: "pause"|"resume"|"kill"|"inject", content?: string}`
 
-**HTTP API (v0.3.0):**
+**HTTP API (v0.2.3):**
 - `GET /api/agents` — all agents (including disconnected)
 - `GET /api/agents/:id/history` — paginated VLM event timeline
 - `GET /api/agents/:id/logs` — paginated logs with `?type=` filter
@@ -100,18 +100,18 @@ All in `.env.example`. Key ones:
 - `ARGUS_SCREEN_INTERVAL` — Screen broadcast interval in ms (default: `250`)
 - `ARGUS_TIER1_COOLDOWN` — Cooldown after tier2 before tier1 resumes in ms (default: `5000`)
 - `NEXT_PUBLIC_HUB_URL` — Dashboard WebSocket base URL (default: `ws://localhost:8000`)
-- `ARGUS_PTY` — PTY mode: 0=pipe (default), 1=pty via `script` + `@xterm/headless` *(v0.3.0)*
-- `ARGUS_PTY_COLS` / `ARGUS_PTY_ROWS` — Terminal dimensions in PTY mode (default: 80x24) *(v0.3.0)*
-- `ARGUS_DB_PATH` — SQLite file path; empty = no persistence *(v0.3.0)*
-- `ARGUS_AGENT_TASK` — Agent task description sent in register metadata *(v0.3.0)*
+- `ARGUS_PTY` — PTY mode: 0=pipe (default), 1=pty via `script` + `@xterm/headless` *(v0.2.3)*
+- `ARGUS_PTY_COLS` / `ARGUS_PTY_ROWS` — Terminal dimensions in PTY mode (default: 80x24) *(v0.2.3)*
+- `ARGUS_DB_PATH` — SQLite file path; empty = no persistence *(v0.2.3)*
+- `ARGUS_AGENT_TASK` — Agent task description sent in register metadata *(v0.2.3)*
 
 ## Key Files
 
 - `src/hub/hub.ts` — WebSocket relay with agent registry, command routing, HTTP API (`createHub()` factory)
-- `src/hub/db.ts` — SQLite persistence layer using `bun:sqlite` *(v0.3.0)*
+- `src/hub/db.ts` — SQLite persistence layer using `bun:sqlite` *(v0.2.3)*
 - `src/probe/probe.ts` — VLM monitoring pipeline (connects to hub, spawns child process, pipe or PTY mode)
 - `src/probe/probe-utils.ts` — Pure functions extracted from probe (screen buffers, JSON extraction, command handler, pipeStream, pipeToTerminal)
-- `src/probe/terminal.ts` — `@xterm/headless` wrapper with SGR reconstruction for PTY mode *(v0.3.0)*
+- `src/probe/terminal.ts` — `@xterm/headless` wrapper with SGR reconstruction for PTY mode *(v0.2.3)*
 - `src/probe/ansi-to-svg.ts` — Inline ANSI→SVG renderer (replaces unmaintained ansi-to-svg package)
 - `src/app/useAgentSocket.ts` — Custom hook for dashboard WebSocket + `applyMessage()` pure function + rAF message batching
 - `src/demo/demo_agent.ts` — Simulated SWE-agent that loops into failure (for demos)
@@ -130,9 +130,9 @@ All in `.env.example`. Key ones:
 - **Runtime:** Bun (everything — backend, Next.js, scripts)
 - **Frontend:** Next.js 16, React 19, TypeScript 5, CSS Modules
 - **Process capture:** Bun.spawn — pipe mode (stdout/stderr) or PTY mode (`script` + `@xterm/headless`)
-- **Terminal emulation:** `@xterm/headless` v6.0.0 — headless xterm for 2D grid capture in PTY mode *(v0.3.0)*
+- **Terminal emulation:** `@xterm/headless` v6.0.0 — headless xterm for 2D grid capture in PTY mode *(v0.2.3)*
 - **Visual pipeline:** Inline ANSI→SVG renderer + sharp (SVG → JPEG)
-- **Persistence:** `bun:sqlite` — optional SQLite for logs, VLM events, agent state *(v0.3.0)*
+- **Persistence:** `bun:sqlite` — optional SQLite for logs, VLM events, agent state *(v0.2.3)*
 - **VLM:** OpenAI SDK against any compatible endpoint (text tier1 + vision tier2)
 - **Font:** JetBrains Mono | **Icons:** lucide-react
 
