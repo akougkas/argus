@@ -135,9 +135,35 @@ export function useAgentSocket(url: string) {
   const reconnectDelayRef = useRef(1000);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unmountedRef = useRef(false);
+  const msgBufferRef = useRef<Record<string, unknown>[]>([]);
+  const flushTimerRef = useRef<ReturnType<typeof requestAnimationFrame> | null>(null);
 
   useEffect(() => {
     unmountedRef.current = false;
+
+    function flushMessages() {
+      const batch = msgBufferRef.current;
+      if (batch.length === 0) return;
+      msgBufferRef.current = [];
+      flushTimerRef.current = null;
+
+      setAgents((prev) => {
+        let next = prev;
+        for (const msg of batch) {
+          next = applyMessage(next, msg);
+        }
+        // Handle selection for init/disconnect
+        const lastInit = batch.findLast(m => m.type === "init");
+        if (lastInit && next.length > 0) {
+          setSelectedAgentId((prevId) => prevId || next[0].id);
+        }
+        const lastDc = batch.findLast(m => m.type === "agent_disconnected");
+        if (lastDc) {
+          setSelectedAgentId((prevId) => prevId === lastDc.agent_id ? "" : prevId);
+        }
+        return next;
+      });
+    }
 
     function connect() {
       if (unmountedRef.current) return;
@@ -160,16 +186,10 @@ export function useAgentSocket(url: string) {
           return;
         }
 
-        setAgents((prev) => {
-          const next = applyMessage(prev, data);
-          if (data.type === "init" && next.length > 0) {
-            setSelectedAgentId((prevId) => prevId || next[0].id);
-          }
-          if (data.type === "agent_disconnected") {
-            setSelectedAgentId((prevId) => prevId === data.agent_id ? "" : prevId);
-          }
-          return next;
-        });
+        msgBufferRef.current.push(data);
+        if (!flushTimerRef.current) {
+          flushTimerRef.current = requestAnimationFrame(flushMessages);
+        }
       };
 
       ws.onclose = () => {
@@ -189,6 +209,7 @@ export function useAgentSocket(url: string) {
     return () => {
       unmountedRef.current = true;
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      if (flushTimerRef.current) cancelAnimationFrame(flushTimerRef.current);
       wsRef.current?.close();
     };
   }, [url]);

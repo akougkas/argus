@@ -25,8 +25,9 @@ const VISION_URL = process.env.ARGUS_VISION_URL || VLM_URL;
 const VISION_MODEL = process.env.ARGUS_VISION_MODEL || VLM_MODEL;
 const VISION_KEY = process.env.ARGUS_VISION_KEY || VLM_KEY;
 const FAST_INTERVAL = parseInt(process.env.ARGUS_FAST_INTERVAL || "1000");
-const SCREEN_INTERVAL = parseInt(process.env.ARGUS_SCREEN_INTERVAL || "100");
+const SCREEN_INTERVAL = parseInt(process.env.ARGUS_SCREEN_INTERVAL || "250");
 const FRAME_INTERVAL = parseInt(process.env.ARGUS_FRAME_INTERVAL || "2000");
+const TIER1_COOLDOWN = parseInt(process.env.ARGUS_TIER1_COOLDOWN || "5000");
 
 // CLI: `bun run probe.ts -- python3 my_agent.py`  (default: demo_agent.ts)
 const cliArgs = process.argv.slice(2);
@@ -58,6 +59,20 @@ let tier1IntervalId: ReturnType<typeof setInterval> | null = null;
 // Frame capture failure tracking
 let consecutiveFrameFailures = 0;
 
+// Tier1 cooldown after tier2 escalation
+let lastTier2Completion = 0;
+
+// Cached VLM state for re-registration
+let lastSentState = "PROGRESSING";
+let lastSentConfidence = 100;
+let lastSentReasoning = "";
+
+// Operator override — blocks VLM from overriding PAUSED state
+let operatorOverride: string | null = null;
+
+// Shutdown guard
+let shuttingDown = false;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -73,6 +88,13 @@ function sendLog(text: string, type: string = "info") {
 }
 
 function sendVlmState(state: string, confidence: number, reasoning: string) {
+  // Operator states (PAUSED) take precedence — only operator commands and EXITED can override
+  if (operatorOverride && state !== operatorOverride && state !== "EXITED") return;
+  // EXITED is terminal — in-flight VLM results must not override it
+  if (lastSentState === "EXITED" && state !== "EXITED") return;
+  lastSentState = state;
+  lastSentConfidence = confidence;
+  lastSentReasoning = reasoning;
   send({
     type: "vlm_update",
     agent_id: AGENT_ID,
@@ -84,6 +106,29 @@ function clearIntervals() {
   if (screenIntervalId) { clearInterval(screenIntervalId); screenIntervalId = null; }
   if (frameIntervalId) { clearInterval(frameIntervalId); frameIntervalId = null; }
   if (tier1IntervalId) { clearInterval(tier1IntervalId); tier1IntervalId = null; }
+}
+
+function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log("[probe] Shutting down...");
+  clearIntervals();
+  if (childProc) {
+    try { process.kill(childProc.pid, "SIGTERM"); } catch {}
+    const forceTimer = setTimeout(() => {
+      try { childProc?.kill(9); } catch {}
+      if (ws?.readyState === WebSocket.OPEN) ws.close();
+      process.exit(0);
+    }, 3000);
+    childProc.exited.then(() => {
+      clearTimeout(forceTimer);
+      if (ws?.readyState === WebSocket.OPEN) ws.close();
+      process.exit(0);
+    });
+  } else {
+    if (ws?.readyState === WebSocket.OPEN) ws.close();
+    process.exit(0);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -134,8 +179,9 @@ async function startProbe() {
     }
   }, SCREEN_INTERVAL);
 
-  // Frame capture loop
+  // Frame capture loop — skip when paused/exited
   frameIntervalId = setInterval(async () => {
+    if (operatorOverride || lastSentState === "EXITED") return;
     try {
       const frame = await captureFrame();
       if (frame) {
@@ -153,9 +199,11 @@ async function startProbe() {
     }
   }, FRAME_INTERVAL);
 
-  // Tier 1: Fast perception loop — BUG-1 fix: skip if screen unchanged
+  // Tier 1: Fast perception loop — skip if paused/exited, deep reasoning, or in cooldown
   tier1IntervalId = setInterval(async () => {
+    if (operatorOverride || lastSentState === "EXITED") return;
     if (isDeepReasoning || isFastPerceptionRunning) return;
+    if (Date.now() - lastTier2Completion < TIER1_COOLDOWN) return;
     isFastPerceptionRunning = true;
 
     try {
@@ -240,28 +288,38 @@ Reply ONLY with a raw, valid JSON object:
 
     let response;
     const fb = getFrameBuffer();
+    let usedVision = false;
 
     if (fb.length >= 2) {
       console.log(`[tier2] Vision mode — ${fb.length} frames available`);
-      const gridBase64 = await compositeGrid(fb.slice(-4));
+      try {
+        const gridBase64 = await compositeGrid(fb.slice(-4));
 
-      response = await visionClient.chat.completions.create(
-        {
-          model: VISION_MODEL,
-          messages: [{
-            role: "user",
-            content: [
-              { type: "text", text: `${basePrompt}\n\nThe 2x2 grid shows 4 chronological terminal screenshots (top-left → top-right → bottom-left → bottom-right). Analyze the temporal progression.` },
-              { type: "image_url", image_url: { url: `data:image/jpeg;base64,${gridBase64}` } },
-            ],
-          }],
-          temperature: 0,
-          max_tokens: 300,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } as any,
-        { signal: controller.signal },
-      );
-    } else {
+        response = await visionClient.chat.completions.create(
+          {
+            model: VISION_MODEL,
+            messages: [{
+              role: "user",
+              content: [
+                { type: "text", text: `${basePrompt}\n\nThe 2x2 grid shows 4 chronological terminal screenshots (top-left → top-right → bottom-left → bottom-right). Analyze the temporal progression.` },
+                { type: "image_url", image_url: { url: `data:image/jpeg;base64,${gridBase64}` } },
+              ],
+            }],
+            temperature: 0,
+            max_tokens: 300,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          } as any,
+          { signal: controller.signal },
+        );
+        usedVision = true;
+      } catch (visionErr: unknown) {
+        if (visionErr instanceof Error && visionErr.name === "AbortError") throw visionErr;
+        const msg = visionErr instanceof Error ? visionErr.message : String(visionErr);
+        console.warn(`[tier2] Vision failed (${msg}), falling back to text`);
+      }
+    }
+
+    if (!usedVision) {
       // Text fallback: use current screen content
       console.log("[tier2] Text fallback mode");
       const currentScreen = getScreen();
@@ -300,6 +358,7 @@ Reply ONLY with a raw, valid JSON object:
     }
   } finally {
     isDeepReasoning = false;
+    lastTier2Completion = Date.now();
   }
 }
 
@@ -317,6 +376,14 @@ function connect() {
     reconnectDelay = 1000;
     console.log(`[probe] Connected to hub (${HUB_URL})`);
     send({ type: "register", agent_id: AGENT_ID });
+
+    // Re-send current state on reconnect (probe already running)
+    if (probeStarted) {
+      sendVlmState(lastSentState, lastSentConfidence, lastSentReasoning);
+      const screen = getScreen();
+      if (screen) send({ type: "terminal_screen_update", agent_id: AGENT_ID, screen });
+    }
+
     startProbe();
   };
 
@@ -328,7 +395,11 @@ function connect() {
       console.warn("[probe] Received malformed JSON from hub");
       return;
     }
-    if (msg.type === "command") handleCommand(msg, childProc, sendLog, sendVlmState);
+    if (msg.type === "command") {
+      if (msg.action === "pause") operatorOverride = "PAUSED";
+      else if (msg.action === "resume") operatorOverride = null;
+      handleCommand(msg, childProc, sendLog, sendVlmState);
+    }
   };
 
   ws.onerror = () => {
@@ -336,6 +407,7 @@ function connect() {
   };
 
   ws.onclose = () => {
+    if (shuttingDown) return;
     console.log(`[probe] Disconnected. Reconnecting in ${reconnectDelay / 1000}s...`);
     setTimeout(connect, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
@@ -349,6 +421,8 @@ function connect() {
 if (import.meta.main) {
   console.log(`[probe] Argus Probe — agent=${AGENT_ID} cmd="${SPAWN_CMD.join(" ")}"`);
   connect();
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 }
 
 export { connect, startProbe, resetState };

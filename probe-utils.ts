@@ -1,4 +1,4 @@
-import ansiToSvg from "ansi-to-svg";
+import { ansiToSvg } from "./ansi-to-svg";
 import sharp from "sharp";
 
 // ---------------------------------------------------------------------------

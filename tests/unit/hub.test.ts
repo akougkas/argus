@@ -217,6 +217,58 @@ describe("createHub", () => {
     probe.close();
   });
 
+  test("re-register preserves existing agent state", async () => {
+    hub = createHub(0);
+
+    const dash = new WebSocket(wsUrl(hub, "/ws/dashboard"));
+    await waitForMessage(dash); // empty init
+
+    // Register probe and update state
+    const probe = new WebSocket(wsUrl(hub, "/ws/probe"));
+    await waitForOpen(probe);
+    probe.send(JSON.stringify({ type: "register", agent_id: "rereg-01" }));
+    await waitForMessage(dash); // init
+
+    probe.send(JSON.stringify({
+      type: "vlm_update",
+      data: { agent_state: "STUCK", confidence_score: 30, reasoning: "looping" },
+    }));
+    await waitForMessage(dash); // vlm update
+
+    // Verify state before re-register
+    expect(hub.agents.get("rereg-01")?.state).toBe("STUCK");
+
+    // Simulate re-registration (same probe, same ID)
+    probe.send(JSON.stringify({ type: "register", agent_id: "rereg-01" }));
+    const initMsg = await waitForMessage(dash);
+    expect(initMsg.type).toBe("init");
+
+    // State should be preserved, not reset to PROGRESSING
+    const agent = hub.agents.get("rereg-01");
+    expect(agent?.state).toBe("STUCK");
+    expect(agent?.confidence).toBe(30);
+
+    probe.close();
+    dash.close();
+  });
+
+  test("new agent registration creates fresh state", async () => {
+    hub = createHub(0);
+
+    const probe = new WebSocket(wsUrl(hub, "/ws/probe"));
+    await waitForOpen(probe);
+    probe.send(JSON.stringify({ type: "register", agent_id: "new-agent" }));
+
+    await Bun.sleep(50);
+
+    const agent = hub.agents.get("new-agent");
+    expect(agent?.state).toBe("PROGRESSING");
+    expect(agent?.confidence).toBe(100);
+    expect(agent?.logs).toEqual([]);
+
+    probe.close();
+  });
+
   test("GET /health returns status with agent/dashboard counts", async () => {
     hub = createHub(0);
 

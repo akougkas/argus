@@ -52,7 +52,9 @@ export function createHub(port: number): HubInstance {
       if (!id) return;
       ws.data.agentId = id;
       probes.set(id, ws);
-      agents.set(id, { state: "PROGRESSING", confidence: 100, reasoning: "", logs: [] });
+      if (!agents.has(id)) {
+        agents.set(id, { state: "PROGRESSING", confidence: 100, reasoning: "", logs: [] });
+      }
       console.log(`[hub] Probe registered: ${id}`);
       broadcastJSON({ type: "init", data: Object.fromEntries(agents) });
       return;
@@ -190,6 +192,14 @@ export function createHub(port: number): HubInstance {
 
 if (import.meta.main) {
   const PORT = parseInt(process.env.ARGUS_HUB_PORT || "8000");
-  createHub(PORT);
+  const hub = createHub(PORT);
   console.log(`[hub] Argus Hub running on ws://localhost:${PORT}`);
+
+  function shutdown() {
+    console.log("[hub] Shutting down...");
+    hub.stop();
+    process.exit(0);
+  }
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 }
