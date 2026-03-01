@@ -1,35 +1,57 @@
-# Argus Development - Next Session Prompt
+# Next Session: Visual VLM Pipeline
 
-You are taking over the development of **Project Argus**, a visual, real-time verification and steering layer for long-horizon AI agents ("Datadog for AI Agents").
+## Context
+The text-based VLM pipeline works end-to-end (probe → hub → dashboard, with tier1/tier2 detection via Qwen3.5 on homelab). But we're sending stripped text to the VLM, not images. The product vision is **visual monitoring** — terminal screenshots fed to a VLM's vision API.
 
-## 1. Project Context & Current Architecture
-We have successfully scaffolded a multi-tier pipeline, but it needs stabilization, a thorough code review, and a realistic TypeScript/Bun demo agent. 
+## Why Visual > Text
+1. **Information density** — An image carries layout, colors, error highlighting, progress bars, cursor position. "An image is worth 1000 words" literally applies here.
+2. **Token efficiency** — DeepSeek research showed compressing text into images is more token-efficient than raw text for LLM analysis. A 480p terminal screenshot ~ 258 vision tokens vs 500+ text tokens.
+3. **Temporal reasoning** — Send 4 sequential frames as a grid/strip. VLM sees time progression in one inference instead of parsing interleaved text dumps.
+4. **Universality** — Works for any visual output (browsers, IDEs, GUIs), not just terminals.
 
-**Current Stack:**
-*   **Frontend (Next.js):** Located in `src/`. A dark-mode, terminal-styled dashboard that connects to a local WebSocket hub. It renders live agent logs, visual frame buffers (a raw text grid), and VLM anomaly alerts.
-*   **Hub Server (Python/FastAPI):** `python-probe/server.py`. A lightweight WebSocket router that accepts connections from both the Next.js dashboard and edge probes, routing messages between them.
-*   **The Edge Probe (Python/pty):** `python-probe/pty_probe.py`. A highly optimized pseudo-terminal (PTY) multiplexer using `pyte`. It wraps an agent process, captures raw ANSI streams, maintains a 2D virtual screen, and streams the UI at 20fps.
-*   **The Compound VLM Engine:** We use a Two-Tier system powered **exclusively** by a local `Qwen3.5-35B-A3B-UD-Q4_K_XL` model running on `llama.cpp` at `http://100.74.131.112:8080/v1` (the "Mini" node). 
-    *   **Tier 1 (Fast Perception):** Runs frequently, looks at the bottom 15 lines of the terminal, and replies quickly (OK/ANOMALY).
-    *   **Tier 2 (Deep Reasoning):** Triggers only on anomalies. Reviews temporal screen history and outputs strict JSON explaining the agent's failure state.
+## Implementation Plan: ANSI-to-SVG + sharp
 
-## 2. Your Mission
+### New Dependencies
+- `ansi-to-svg` — Converts raw ANSI terminal output (with escape codes) to SVG
+- `sharp` — Rasterizes SVG to PNG/JPEG, fast native bindings
 
-### Step 1: Code Review & Wiring Verification
-Please review `pty_probe.py`, `server.py`, and `src/app/page.tsx`. 
-*   Fix any lingering bugs in JSON extraction, asynchronous deadlocks, or WebSocket routing.
-*   Ensure that the Next.js frontend perfectly handles `terminal_screen_update`, `log_update`, and `vlm_update` events. The UI should smoothly stream the terminal grid without flickering, and properly flash/display reasoning when the VLM intervenes.
+### Changes to probe.ts
 
-### Step 2: Build a Realistic Bun + TypeScript Demo Agent
-We are currently using a rudimentary Python script (`dummy_agent.py`) to fake an agent's terminal output. I want you to replace this with a modern, realistic **Bun + TypeScript** mock agent.
-*   Create `demo_agent.ts`.
-*   Simulate a modern SWE-Agent or Data-Agent workflow (e.g., using Chalk for colors, showing realistic `npm/bun install` outputs, progress bars, and git checkouts).
-*   Script a scenario where the agent makes progress, hits a warning but recovers, and then ultimately gets trapped in a catastrophic, infinite error loop (e.g., a permissions error, an unresolvable dependency, or an endless hallucination). 
-*   This needs to output raw ANSI that our `pyte` virtual terminal can parse.
+#### 1. Capture raw ANSI output (not stripped)
+Currently we strip ANSI codes for the screen buffer. For visual mode, keep the raw ANSI stream for the last N screen states.
 
-### Step 3: End-to-End Stabilization
-*   Wire the `pty_probe.py` to supervise your new `bun run demo_agent.ts` process.
-*   Run the pipeline end-to-end and use your browser tools to verify the dashboard accurately reflects the Bun agent's terminal and successfully catches the anomaly using the Qwen 3.5 model.
-*   Ensure that the `wait_for` timeouts and concurrency locks in `pty_probe.py` perfectly protect the local Llama server from being overwhelmed if it runs slowly.
+```
+Raw ANSI buffer → ansi-to-svg → SVG string → sharp → JPEG buffer → base64
+```
 
-Please proceed methodically. Start by auditing the codebase, then build the Bun demo, and finally run the system.
+#### 2. New function: captureFrame()
+```typescript
+async function captureFrame(): Promise<string> {
+  const rawAnsi = getRawScreen(); // last 24 lines with ANSI codes intact
+  const svg = ansiToSvg(rawAnsi, { /* dark theme, JetBrains Mono */ });
+  const jpeg = await sharp(Buffer.from(svg))
+    .resize(960, 540)
+    .jpeg({ quality: 60 })
+    .toBuffer();
+  return jpeg.toString('base64');
+}
+```
+
+#### 3. Modify VLM calls to use vision API
+Tier 1 sends a single frame image. Tier 2 composites 4 frames into a 2x2 grid for temporal analysis using sharp.composite().
+
+#### 4. Frame buffer
+Replace `screenHistory: string[]` with `frameBuffer: Buffer[]` — stores last 10 JPEG frames.
+
+### VLM Model Consideration
+- Qwen3.5-35B-A3B is **text-only** (no vision)
+- Need a vision model: Qwen2.5-VL-7B, LLaVA, or GPT-4o-mini
+- Could run Qwen2.5-VL-7B on homelab via llama.cpp
+- Or use GPT-4o-mini for the PoC (cheap, fast, excellent vision)
+- **Hybrid approach:** keep text-based tier1 as fast pre-filter, use vision for tier2 deep reasoning only
+
+## Dashboard Fixes
+1. Remove mock agents (A-02 through A-04) from page.tsx — only show real connected probes
+2. Handle `agent_disconnected` message from hub
+3. Add a "Resume" button (currently only pause exists, no way to unpause from UI)
+4. Wire `frame_update` messages to display terminal screenshots in the visual feed area

@@ -39,7 +39,7 @@ Start order: hub → probe → dashboard.
 
 **hub.ts** — Bun WebSocket server (:8000). Two endpoints: `/ws/probe` and `/ws/dashboard`. Probes register with `{type: "register", agent_id}` on connect. Hub maintains agent state and routes dashboard commands to the correct probe. Port configurable via `ARGUS_HUB_PORT`.
 
-**probe.ts** — PTY wrapper + two-tier VLM pipeline. Spawns any command via node-pty, captures terminal state with xterm headless. Streams screen diffs and log lines to hub. Handles commands from hub: SIGSTOP (pause), SIGCONT (resume), SIGKILL (kill), PTY write (inject). All config via env vars (see `.env.example`).
+**probe.ts** — Process wrapper + two-tier VLM pipeline. Spawns any command via Bun.spawn with piped stdout/stderr. Maintains a rolling line buffer as the "screen" and streams diffs + log lines to hub. Handles commands from hub: SIGSTOP (pause), SIGCONT (resume), SIGKILL (kill), stdin write (inject). Uses `chat_template_kwargs: {enable_thinking: false}` for Qwen3.5 reasoning models. All config via env vars (see `.env.example`).
 
 **VLM Pipeline:**
 - Tier 1 (every 1s): Fast binary check — "ANOMALY" or "OK" (5s timeout)
@@ -83,7 +83,7 @@ All in `.env.example`. Key ones:
 
 - **Runtime:** Bun (everything — backend, Next.js, scripts)
 - **Frontend:** Next.js 16, React 19, TypeScript 5, CSS Modules
-- **Terminal capture:** node-pty + @xterm/headless
+- **Process capture:** Bun.spawn with piped stdout/stderr, rolling line buffer
 - **VLM:** OpenAI SDK against any compatible endpoint
 - **Font:** JetBrains Mono | **Icons:** lucide-react
 
