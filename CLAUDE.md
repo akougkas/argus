@@ -42,8 +42,9 @@ Start order: hub → probe → dashboard.
 **probe.ts** — Process wrapper + two-tier VLM pipeline. Spawns any command via Bun.spawn with piped stdout/stderr. Maintains a rolling line buffer as the "screen" and streams diffs + log lines to hub. Handles commands from hub: SIGSTOP (pause), SIGCONT (resume), SIGKILL (kill), stdin write (inject). Uses `chat_template_kwargs: {enable_thinking: false}` for Qwen3.5 reasoning models. All config via env vars (see `.env.example`).
 
 **VLM Pipeline:**
-- Tier 1 (every 1s): Fast binary check — "ANOMALY" or "OK" (5s timeout)
-- Tier 2 (on escalation): Deep reasoning with temporal context → JSON with state classification + confidence (45s timeout)
+- Tier 1 (every 1s): Text-based fast binary check — "ANOMALY" or "OK" (5s timeout)
+- Tier 2 (on escalation): Vision-based deep reasoning with 2x2 temporal frame grid → JSON with state classification + confidence (45s timeout). Falls back to text if no frames available.
+- Visual capture (every 2s): ANSI → SVG (ansi-to-svg) → JPEG (sharp) → base64. Frames stored in buffer and streamed to dashboard.
 
 **page.tsx** — Next.js dashboard. CRT terminal aesthetic. Connects to `ws://localhost:8000/ws/dashboard`. Agent grid with live terminal feed, logs, state badges, confidence. Sidebar with pause/kill/inject controls.
 
@@ -54,20 +55,23 @@ Start order: hub → probe → dashboard.
 - `terminal_screen_update` — raw terminal text
 - `log_update` — individual log line `{text, type}`
 - `vlm_update` — state change from VLM `{agent_state, confidence_score, reasoning}`
-- `frame_update` — base64 JPEG frame (future use)
+- `frame_update` — base64 JPEG frame from visual pipeline
+- `agent_disconnected` — probe disconnected, remove from UI
 - `init` — full agent roster sent to dashboard on connect
 
 **Dashboard → Hub → Probe:**
-- `command` — `{action: "pause"|"kill"|"inject", content?: string}`
+- `command` — `{action: "pause"|"resume"|"kill"|"inject", content?: string}`
 
 **Agent states:** PROGRESSING, STUCK, DANGEROUS, HALLUCINATING
 
 ## Environment Variables
 
 All in `.env.example`. Key ones:
-- `ARGUS_VLM_URL` — OpenAI-compatible endpoint (default: `http://localhost:8080/v1`)
-- `ARGUS_VLM_MODEL` — Model name (default: `gpt-4o-mini`)
+- `ARGUS_VLM_URL` — OpenAI-compatible endpoint for text tier1 (default: `http://localhost:8080/v1`)
+- `ARGUS_VLM_MODEL` — Text model name (default: `gpt-4o-mini`)
+- `ARGUS_VISION_URL` / `ARGUS_VISION_MODEL` / `ARGUS_VISION_KEY` — Vision model for tier2 (defaults to VLM values)
 - `ARGUS_AGENT_ID` — Agent identifier (default: `A-01`)
+- `ARGUS_FRAME_INTERVAL` — Frame capture interval in ms (default: `2000`)
 
 ## Key Files
 
@@ -84,7 +88,8 @@ All in `.env.example`. Key ones:
 - **Runtime:** Bun (everything — backend, Next.js, scripts)
 - **Frontend:** Next.js 16, React 19, TypeScript 5, CSS Modules
 - **Process capture:** Bun.spawn with piped stdout/stderr, rolling line buffer
-- **VLM:** OpenAI SDK against any compatible endpoint
+- **Visual pipeline:** ansi-to-svg + sharp (ANSI → SVG → JPEG)
+- **VLM:** OpenAI SDK against any compatible endpoint (text tier1 + vision tier2)
 - **Font:** JetBrains Mono | **Icons:** lucide-react
 
 ## Conventions

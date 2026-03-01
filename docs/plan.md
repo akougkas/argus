@@ -1,41 +1,41 @@
-# Project Argus: Execution Plan
+# Project Argus: Roadmap
 
-This document outlines the multi-day effort to build Project Argus from the ground up, transitioning from a rapid Proof of Concept to a robust Enterprise DAEMON and SaaS dashboard.
+## Phase 1: Working PoC (DONE)
+Text-based VLM pipeline, end-to-end.
+- Bun WebSocket hub with dynamic agent registry
+- Probe wraps any command via Bun.spawn, streams logs + screen state
+- Two-tier VLM: fast text tier1 (1s) + deep reasoning tier2 (on anomaly)
+- Dashboard: CRT terminal aesthetic, live agent grid, pause/kill/inject controls
+- Demo agent simulating SWE-agent failure loops
 
-## Phase 1: The "Wow Factor" Proof of Concept (Current Phase)
-**Goal:** Build a rapid, local-only prototype to demonstrate the core value proposition (AI supervising AI) and generate viral interest.
-*   **1.1 Python Edge Probe (`argus_probe.py`):**
-    *   Write a Python script that takes a screen capture every 5 seconds using `mss` or `screencapture`/`scrot`.
-    *   Implement basic SSIM or pixel diffing to only save frames that have changed.
-    *   Implement local log ingestion (tailing a file or piping stdout).
-*   **1.2 VLM Verification Loop:**
-    *   Every 60 seconds, package the keyframes and recent logs.
-    *   Send the payload to the Gemini 1.5 Flash API using the strict JSON schema prompt.
-*   **1.3 Local Dashboard / Alerting:**
-    *   Connect the existing Next.js dashboard UI to this local python probe (via a simple local HTTP server/WebSocket).
-    *   Ensure the Next.js UI properly reflects the real-time VLM inferences (Progressing, Stuck, Dangerous).
+## Phase 2: Visual VLM Pipeline (DONE)
+Terminal screenshots fed to vision models for richer analysis.
+- ANSI-to-SVG rendering (ansi-to-svg) + sharp rasterization to JPEG
+- Frame buffer with periodic capture (every 2s)
+- Tier2 vision: 2x2 temporal grid composited from recent frames
+- Separate vision model config (text tier1 stays fast, vision tier2 goes deep)
+- Frame streaming to dashboard via `frame_update` messages
+- Dashboard: real probes only (no mocks), agent_disconnected handling, Resume button
 
-## Phase 2: The Core Telemetry Moat (Rust Edge Daemon)
-**Goal:** Replace the Python PoC with the high-performance, memory-safe Rust daemon (`argusd`).
-*   **2.1 Rust Project Setup:** Initialize the Cargo workspace.
-*   **2.2 Zero-Copy Visuals:** Implement X11/Wayland shared memory (`shmget`) extraction and SIMD-accelerated SSIM calculations.
-*   **2.3 PTY Multiplexing:** Wrap the target agent process in a pseudo-terminal using `portable-pty` to capture raw ANSI logs and interactive prompts.
-*   **2.4 Performance Tuning:** Ensure the daemon strictly respects cgroups limits (<1% CPU, <50MB RAM).
+## Phase 3: Hardening & Multi-Agent
+Make it production-usable for real agent workflows.
+- Reconnection resilience (probe ↔ hub ↔ dashboard)
+- Multi-probe support: run N probes with different ARGUS_AGENT_ID values
+- Agent metadata: task name, start time, command being wrapped
+- Log persistence (SQLite or file-based) for post-mortem analysis
+- SSIM-based frame deduplication at the probe level (skip unchanged screens)
 
-## Phase 3: Ingestion Engine & Verification Loop (Cloud Backend)
-**Goal:** Stand up the scalable cloud infrastructure to handle multiple agents and robust VLM orchestration.
-*   **3.1 Go WebRTC & Ingestion:** Build the backend service to receive UDP frames and batch them into Kafka.
-*   **3.2 Temporal.io Orchestration:** Set up Temporal workflows to manage the sliding temporal window (Redis) and ping the Gemini 1.5 API.
-*   **3.3 Real-time DB:** Store historical logs and VLM judgments in PostgreSQL or DuckDB (currently in `.mcp/zulipchat/zulipchat.duckdb`? Evaluate storage needs).
+## Phase 4: Actuation & Steering
+Close the loop — not just observe, but intervene.
+- LLM MITM proxy: intercept agent's outbound API calls, inject system prompts
+- Auto-pause on high-confidence DANGEROUS detection (configurable threshold)
+- Timelapse generation: stitch keyframes into video summary with VLM chapter markers
+- Webhook/Slack notifications on state transitions
 
-## Phase 4: Actuation & Control (The "Steering Wheel")
-**Goal:** Implement the bidirectional communication to actually control the agent.
-*   **4.1 Hard Brake (`SIGSTOP`):** Implement the gRPC command to freeze the agent's PID tree.
-*   **4.2 Soft Steer (LLM MITM Proxy):** Build the local HTTP interceptor to inject `system` prompts into the agent's outgoing LLM requests.
-*   **4.3 Dashboard Integration:** Wire up the "Pause", "Kill", and "Inject Prompt" buttons on the Next.js dashboard to trigger these actuations.
-
-## Phase 5: SaaS Polish & Launch
-*   **5.1 Auth & Tenancy:** Add NextAuth or Clerk for B2B user management.
-*   **5.2 Billing:** Integrate Stripe (e.g., $1.00 per agent-hour monitoring).
-*   **5.3 Time-Lapse Generation:** Use `ffmpeg` to stitch keyframes into a fast-forwarded video summary with VLM chapter markers.
-*   **5.4 SDK Packages:** Publish `@argus-ai/observer` to NPM and `argus-observer` to PyPI.
+## Phase 5: Production Infrastructure
+Scale beyond local dev.
+- Rust daemon (argusd) for zero-copy visual capture and strict resource bounding
+- WebRTC live streaming for sub-150ms latency to remote dashboards
+- Cloud backend: Kafka/Redis temporal buffers, PostgreSQL for historical data
+- Auth, tenancy, billing (SaaS model)
+- SDK packages: `@argus-ai/observer` (npm), `argus-observer` (PyPI)

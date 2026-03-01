@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Activity, ShieldAlert, Pause, XCircle, Send, Terminal, Cpu, Eye, Code, Shield } from "lucide-react";
+import { Activity, ShieldAlert, Pause, Play, XCircle, Send, Terminal, Cpu, Eye, Code, Shield } from "lucide-react";
 import styles from "./page.module.css";
 
 type AgentState = "PROGRESSING" | "STUCK" | "DANGEROUS" | "HALLUCINATING";
@@ -25,16 +25,9 @@ interface Agent {
   ptyScreen?: string;
 }
 
-const MOCK_AGENTS: Agent[] = [
-  { id: "A-01", name: "SWE-Frontend", task: "Migrate Auth to NextAuth", state: "PROGRESSING", logs: [], confidence: 95 },
-  { id: "A-02", name: "DB-Admin", task: "Postgres Index Optimization", state: "PROGRESSING", logs: [], confidence: 88 },
-  { id: "A-03", name: "QA-Runner", task: "E2E Checkout Flow", state: "PROGRESSING", logs: [], confidence: 92 },
-  { id: "A-04", name: "DevOps-Bot", task: "K8s Cluster Upgrade", state: "PROGRESSING", logs: [], confidence: 98 },
-];
-
 export default function Dashboard() {
-  const [agents, setAgents] = useState<Agent[]>(MOCK_AGENTS);
-  const [selectedAgentId, setSelectedAgentId] = useState<string>("A-01");
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [selectedAgentId, setSelectedAgentId] = useState<string>("");
   const logsEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const injectRef = useRef<HTMLTextAreaElement>(null);
@@ -53,25 +46,38 @@ export default function Dashboard() {
       console.log("Received data:", data);
 
       if (data.type === "init") {
-        // Handle init states
-        const states = data.data;
-        setAgents(prev => prev.map(agent => {
-          if (states[agent.id]) {
-            const newState = states[agent.id];
-            return {
-              ...agent,
-              state: newState.state,
-              confidence: newState.confidence,
-              reasoning: newState.reasoning,
-              logs: [...agent.logs, ...newState.logs.map((l: any) => ({
-                ...l,
-                id: Math.random().toString(36).substring(2, 9),
-                timestamp: new Date().toLocaleTimeString('en-US', { hour12: false })
-              }))]
-            };
-          }
-          return agent;
+        // Build agent list from server state — only real connected probes
+        const states = data.data as Record<string, any>;
+        const serverAgents: Agent[] = Object.entries(states).map(([id, s]) => ({
+          id,
+          name: id,
+          task: "",
+          state: s.state || "PROGRESSING",
+          confidence: s.confidence ?? 100,
+          reasoning: s.reasoning || "",
+          logs: (s.logs || []).map((l: any) => ({
+            ...l,
+            id: Math.random().toString(36).substring(2, 9),
+            timestamp: new Date().toLocaleTimeString('en-US', { hour12: false }),
+          })),
         }));
+        setAgents(prev => {
+          // Merge: update existing, add new, keep agents not in init (they may still be connected)
+          const merged = new Map(prev.map(a => [a.id, a]));
+          for (const a of serverAgents) {
+            const existing = merged.get(a.id);
+            merged.set(a.id, existing ? { ...existing, state: a.state, confidence: a.confidence, reasoning: a.reasoning } : a);
+          }
+          return Array.from(merged.values());
+        });
+        // Auto-select first agent if none selected
+        if (Object.keys(states).length > 0) {
+          setSelectedAgentId(prev => prev || Object.keys(states)[0]);
+        }
+      } else if (data.type === "agent_disconnected") {
+        const disconnectedId = data.agent_id;
+        setAgents(prev => prev.filter(a => a.id !== disconnectedId));
+        setSelectedAgentId(prev => prev === disconnectedId ? "" : prev);
       } else if (data.type === "frame_update") {
         setAgents(prev => prev.map(agent => 
           agent.id === data.agent_id ? { ...agent, frame: data.frame } : agent
@@ -83,9 +89,15 @@ export default function Dashboard() {
       } else if (data.type === "log_update") {
         setAgents(prev => prev.map(agent => {
           if (agent.id === data.agent_id) {
+            const log: LogLine = {
+              id: Math.random().toString(36).substring(2, 9),
+              timestamp: new Date().toLocaleTimeString('en-US', { hour12: false }),
+              text: data.log.text,
+              type: data.log.type || "info",
+            };
             return {
               ...agent,
-              logs: [...agent.logs, data.log].slice(-50)
+              logs: [...agent.logs, log].slice(-50)
             };
           }
           return agent;
@@ -193,6 +205,9 @@ export default function Dashboard() {
                <button className={styles.btn} onClick={() => sendCommand("pause")}>
                  <Pause size={14} /> Pause
                </button>
+               <button className={styles.btn} onClick={() => sendCommand("resume")}>
+                 <Play size={14} /> Resume
+               </button>
                <button className={`${styles.btn} ${styles.danger}`} onClick={() => sendCommand("kill")}>
                  <XCircle size={14} /> Kill
                </button>
@@ -214,6 +229,13 @@ export default function Dashboard() {
       {/* Main Grid Content */}
       <main className={styles.mainContent}>
          <div className={styles.agentGrid}>
+           {agents.length === 0 && (
+             <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '3rem', gap: '1rem', gridColumn: '1 / -1' }}>
+               <Terminal size={48} opacity={0.3} />
+               <p style={{ color: 'var(--text-muted)', fontSize: '1rem' }}>No agents connected</p>
+               <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', opacity: 0.6 }}>Start a probe: bun run dev:probe</p>
+             </div>
+           )}
            {agents.map(agent => (
              <div 
                key={agent.id} 
@@ -249,7 +271,7 @@ export default function Dashboard() {
                   <span>Task: {agent.task}</span>
                </div>
 
-               {/* Mock Video Feed */}
+               {/* Visual Feed */}
                <div className={styles.visualFeed} style={{ position: 'relative', minHeight: '200px', backgroundColor: '#000', color: '#0f0', padding: '10px', overflow: 'hidden' }}>
                  {agent.ptyScreen ? (
                    <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: '12px', lineHeight: '1.2' }}>

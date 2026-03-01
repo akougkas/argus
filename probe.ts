@@ -1,4 +1,6 @@
 import { OpenAI } from "openai";
+import ansiToSvg from "ansi-to-svg";
+import sharp from "sharp";
 
 // ---------------------------------------------------------------------------
 // Configuration (all from env vars or CLI args)
@@ -9,8 +11,12 @@ const HUB_URL = process.env.ARGUS_HUB_URL || "ws://localhost:8000/ws/probe";
 const VLM_URL = process.env.ARGUS_VLM_URL || "http://localhost:8080/v1";
 const VLM_MODEL = process.env.ARGUS_VLM_MODEL || "gpt-4o-mini";
 const VLM_KEY = process.env.ARGUS_VLM_KEY || "no-key";
+const VISION_URL = process.env.ARGUS_VISION_URL || VLM_URL;
+const VISION_MODEL = process.env.ARGUS_VISION_MODEL || VLM_MODEL;
+const VISION_KEY = process.env.ARGUS_VISION_KEY || VLM_KEY;
 const FAST_INTERVAL = parseInt(process.env.ARGUS_FAST_INTERVAL || "1000");
 const SCREEN_INTERVAL = parseInt(process.env.ARGUS_SCREEN_INTERVAL || "100");
+const FRAME_INTERVAL = parseInt(process.env.ARGUS_FRAME_INTERVAL || "2000");
 const SCREEN_ROWS = 24;
 
 // CLI: `bun run probe.ts -- python3 my_agent.py`  (default: demo_agent.ts)
@@ -18,6 +24,7 @@ const cliArgs = process.argv.slice(2);
 const SPAWN_CMD = cliArgs.length > 0 ? cliArgs : ["bun", "run", "demo_agent.ts"];
 
 const openai = new OpenAI({ baseURL: VLM_URL, apiKey: VLM_KEY });
+const visionClient = new OpenAI({ baseURL: VISION_URL, apiKey: VISION_KEY });
 
 // llama.cpp extension: disable thinking/reasoning mode for models that support it
 // (e.g. Qwen3.5). Without this, thinking tokens consume the entire budget.
@@ -39,6 +46,12 @@ let screenHistory: string[] = [];
 
 // Rolling line buffer — the "screen" is the last SCREEN_ROWS lines
 let screenLines: string[] = [];
+
+// Raw ANSI line buffer — preserves escape codes for visual pipeline
+let rawScreenLines: string[] = [];
+
+// JPEG frame buffer for vision tier2
+const frameBuffer: Buffer[] = [];
 
 // Reconnection backoff
 let reconnectDelay = 1000;
@@ -80,6 +93,76 @@ function pushLine(line: string) {
   if (screenLines.length > SCREEN_ROWS * 2) {
     screenLines = screenLines.slice(-SCREEN_ROWS * 2);
   }
+}
+
+function pushRawLine(line: string) {
+  rawScreenLines.push(line);
+  if (rawScreenLines.length > SCREEN_ROWS * 2) {
+    rawScreenLines = rawScreenLines.slice(-SCREEN_ROWS * 2);
+  }
+}
+
+function getRawScreen(): string {
+  return rawScreenLines.slice(-SCREEN_ROWS).join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Visual pipeline — ANSI → SVG → JPEG
+// ---------------------------------------------------------------------------
+
+async function captureFrame(): Promise<string> {
+  const rawAnsi = getRawScreen();
+  if (!rawAnsi.trim()) return "";
+
+  const svg = ansiToSvg(rawAnsi, {
+    fontFace: "JetBrains Mono, Courier",
+    fontSize: 14,
+    lineHeight: 18,
+    colors: {
+      backgroundColor: "#0a0a0a",
+      foregroundColor: "#00ff41",
+    },
+  });
+
+  const jpeg = await sharp(Buffer.from(svg))
+    .resize(960, 540, { fit: "contain", background: "#0a0a0a" })
+    .jpeg({ quality: 60 })
+    .toBuffer();
+
+  return jpeg.toString("base64");
+}
+
+async function compositeGrid(frames: Buffer[]): Promise<string> {
+  const cellW = 480, cellH = 270;
+
+  // Resize all frames to cell size
+  const resized = await Promise.all(
+    frames.slice(-4).map(f =>
+      sharp(f).resize(cellW, cellH, { fit: "contain", background: "#0a0a0a" }).toBuffer()
+    )
+  );
+
+  // Pad to 4 with black cells if fewer frames
+  while (resized.length < 4) {
+    const blank = await sharp({
+      create: { width: cellW, height: cellH, channels: 3, background: { r: 10, g: 10, b: 10 } },
+    }).jpeg().toBuffer();
+    resized.unshift(blank);
+  }
+
+  const grid = await sharp({
+    create: { width: 960, height: 540, channels: 3, background: { r: 0, g: 0, b: 0 } },
+  })
+    .composite([
+      { input: resized[0], top: 0, left: 0 },
+      { input: resized[1], top: 0, left: cellW },
+      { input: resized[2], top: cellH, left: 0 },
+      { input: resized[3], top: cellH, left: cellW },
+    ])
+    .jpeg({ quality: 70 })
+    .toBuffer();
+
+  return grid.toString("base64");
 }
 
 // ---------------------------------------------------------------------------
@@ -124,10 +207,8 @@ function handleCommand(msg: any) {
       break;
 
     case "inject":
-      if (msg.content && childProc.stdin) {
-        const writer = childProc.stdin.getWriter();
-        writer.write(new TextEncoder().encode(msg.content + "\n"));
-        writer.releaseLock();
+      if (msg.content && childProc.stdin && typeof childProc.stdin !== "number") {
+        childProc.stdin.write(msg.content + "\n");
         sendLog(`Injected: ${msg.content}`, "system");
         console.log(`[probe] Injected: ${msg.content}`);
       }
@@ -160,8 +241,8 @@ async function startProbe() {
   }
 
   // Read stdout and stderr streams
-  pipeStream(childProc.stdout, "stdout");
-  pipeStream(childProc.stderr, "stderr");
+  pipeStream(childProc.stdout as ReadableStream<Uint8Array> | null, "stdout");
+  pipeStream(childProc.stderr as ReadableStream<Uint8Array> | null, "stderr");
 
   // Wait for exit
   childProc.exited.then((code) => {
@@ -182,7 +263,23 @@ async function startProbe() {
     }
   }, SCREEN_INTERVAL);
 
-  // Tier 1: Fast perception loop
+  // Frame capture loop — ANSI → SVG → JPEG for visual pipeline + dashboard
+  setInterval(async () => {
+    try {
+      const frame = await captureFrame();
+      if (frame) {
+        const buf = Buffer.from(frame, "base64");
+        frameBuffer.push(buf);
+        if (frameBuffer.length > 10) frameBuffer.shift();
+        // Stream latest frame to dashboard
+        send({ type: "frame_update", agent_id: AGENT_ID, frame });
+      }
+    } catch {
+      // Silently skip frame capture failures (non-critical)
+    }
+  }, FRAME_INTERVAL);
+
+  // Tier 1: Fast perception loop (text-based, unchanged)
   setInterval(async () => {
     if (isDeepReasoning || isFastPerceptionRunning) return;
     isFastPerceptionRunning = true;
@@ -262,11 +359,12 @@ async function startProbe() {
 // Stream reader — pipes subprocess output into screen buffer + log lines
 // ---------------------------------------------------------------------------
 
-async function pipeStream(stream: ReadableStream<Uint8Array> | null, label: string) {
+async function pipeStream(stream: ReadableStream<Uint8Array> | null | undefined, label: string) {
   if (!stream) return;
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let lineBuffer = "";
+  let rawLineBuffer = "";
 
   try {
     while (true) {
@@ -275,8 +373,11 @@ async function pipeStream(stream: ReadableStream<Uint8Array> | null, label: stri
 
       const raw = decoder.decode(value, { stream: true });
       const clean = raw.replace(ANSI_RE, "");
-      lineBuffer += clean;
 
+      lineBuffer += clean;
+      rawLineBuffer += raw;
+
+      // Process stripped lines → screen buffer + log lines
       let idx;
       while ((idx = lineBuffer.indexOf("\n")) !== -1) {
         const line = lineBuffer.slice(0, idx).trim();
@@ -285,6 +386,15 @@ async function pipeStream(stream: ReadableStream<Uint8Array> | null, label: stri
           pushLine(line);
           const isError = label === "stderr" || /error|exception|fatal|✖/i.test(line);
           sendLog(line, isError ? "error" : "info");
+        }
+      }
+
+      // Process raw ANSI lines → visual pipeline buffer
+      while ((idx = rawLineBuffer.indexOf("\n")) !== -1) {
+        const rawLine = rawLineBuffer.slice(0, idx);
+        rawLineBuffer = rawLineBuffer.slice(idx + 1);
+        if (rawLine.trim()) {
+          pushRawLine(rawLine);
         }
       }
     }
@@ -298,14 +408,10 @@ async function pipeStream(stream: ReadableStream<Uint8Array> | null, label: stri
 // ---------------------------------------------------------------------------
 
 async function runDeepReasoning() {
-  const history = screenHistory.slice(-4).join("\n\n--- PREVIOUS FRAME ---\n\n");
-  const prompt = `You are the L5 Argus Overseer. The fast-perception layer flagged an anomaly on the agent's screen.
-Review the recent temporal history of the terminal to determine the exact state. Is it stuck in a loop, failing a build, or hallucinating commands?
+  const basePrompt = `You are the L5 Argus Overseer. The fast-perception layer flagged an anomaly on the agent's terminal.
+Determine the exact state: stuck in a loop, failing a build, or hallucinating commands?
 
-TEMPORAL SCREEN HISTORY:
-${history}
-
-Reply ONLY with a raw, valid JSON object using the exact schema below:
+Reply ONLY with a raw, valid JSON object:
 {
   "agent_state": "STUCK" | "DANGEROUS" | "HALLUCINATING",
   "confidence_score": 0-100,
@@ -316,16 +422,44 @@ Reply ONLY with a raw, valid JSON object using the exact schema below:
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 45000);
 
-    const response = await openai.chat.completions.create(
-      {
-        model: VLM_MODEL,
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0,
-        max_tokens: 300,
-        ...LLAMA_CPP_NO_THINK,
-      } as any,
-      { signal: controller.signal },
-    );
+    let response;
+
+    if (frameBuffer.length >= 2) {
+      // Vision mode: composite recent frames into 2x2 temporal grid
+      console.log(`[tier2] Vision mode — ${frameBuffer.length} frames available`);
+      const gridBase64 = await compositeGrid(frameBuffer.slice(-4));
+
+      response = await visionClient.chat.completions.create(
+        {
+          model: VISION_MODEL,
+          messages: [{
+            role: "user",
+            content: [
+              { type: "text", text: `${basePrompt}\n\nThe 2x2 grid shows 4 chronological terminal screenshots (top-left → top-right → bottom-left → bottom-right). Analyze the temporal progression.` },
+              { type: "image_url", image_url: { url: `data:image/jpeg;base64,${gridBase64}` } },
+            ],
+          }],
+          temperature: 0,
+          max_tokens: 300,
+        } as any,
+        { signal: controller.signal },
+      );
+    } else {
+      // Text fallback: same as before
+      console.log("[tier2] Text fallback mode");
+      const history = screenHistory.slice(-4).join("\n\n--- PREVIOUS FRAME ---\n\n");
+
+      response = await openai.chat.completions.create(
+        {
+          model: VLM_MODEL,
+          messages: [{ role: "user", content: `${basePrompt}\n\nTEMPORAL SCREEN HISTORY:\n${history}` }],
+          temperature: 0,
+          max_tokens: 300,
+          ...LLAMA_CPP_NO_THINK,
+        } as any,
+        { signal: controller.signal },
+      );
+    }
     clearTimeout(timeout);
 
     const rawText = response.choices[0]?.message?.content?.trim() || "";
