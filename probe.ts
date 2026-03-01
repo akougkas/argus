@@ -19,6 +19,10 @@ const SPAWN_CMD = cliArgs.length > 0 ? cliArgs : ["bun", "run", "demo_agent.ts"]
 
 const openai = new OpenAI({ baseURL: VLM_URL, apiKey: VLM_KEY });
 
+// llama.cpp extension: disable thinking/reasoning mode for models that support it
+// (e.g. Qwen3.5). Without this, thinking tokens consume the entire budget.
+const LLAMA_CPP_NO_THINK = { chat_template_kwargs: { enable_thinking: false } };
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -202,7 +206,8 @@ async function startProbe() {
           ],
           temperature: 0,
           max_tokens: 10,
-        },
+          ...LLAMA_CPP_NO_THINK,
+        } as any,
         { signal: controller.signal },
       );
       clearTimeout(timeout);
@@ -316,7 +321,9 @@ Reply ONLY with a raw, valid JSON object using the exact schema below:
         model: VLM_MODEL,
         messages: [{ role: "user", content: prompt }],
         temperature: 0,
-      },
+        max_tokens: 300,
+        ...LLAMA_CPP_NO_THINK,
+      } as any,
       { signal: controller.signal },
     );
     clearTimeout(timeout);
