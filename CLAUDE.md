@@ -45,13 +45,14 @@ Start order: hub → probe → dashboard.
                     └─── PTY mode (ARGUS_PTY=1) ┘       │            ▲  │               │
                          script -qefc + xterm/headless   │            │  │         pause/kill/inject
                                                       VLM tiers       │  └─ HTTP API ──▶ /api/*
-                                                     (Tier 1+2)       │     (v0.2.3)
+                                                     (Tier 1+2)       │     (v0.2.4)
                                                          │            │
-                                                      [SQLite]────────┘
-                                                      (v0.2.3, optional)
+                                                   [StorageLayer]─────┘
+                                                    ├─ SQLite (metadata, logs, events, frame refs)
+                                                    └─ Filesystem (JPEG frames: tmpfs or disk)
 ```
 
-**hub.ts** — Bun WebSocket server (:8000). Two endpoints: `/ws/probe` and `/ws/dashboard`. Probes register with `{type: "register", agent_id, metadata?}` on connect (idempotent — re-register preserves state). Hub maintains agent state and routes dashboard commands to the correct probe. Optional SQLite persistence via `db.ts` (v0.2.3) — survives restarts, provides HTTP API for history/logs. Graceful shutdown via SIGINT/SIGTERM. Port configurable via `ARGUS_HUB_PORT`.
+**hub.ts** — Bun WebSocket server (:8000). Two endpoints: `/ws/probe` and `/ws/dashboard`. Probes register with `{type: "register", agent_id, metadata?}` on connect (idempotent — re-register preserves state). Hub maintains agent state and routes dashboard commands to the correct probe. Storage via `StorageLayer` abstraction (v0.2.4) — `createHub(port, config?: StorageConfig | string)` accepts SQLite path (backwards compat) or full `StorageConfig` with `dbPath`, `framePath`, `frameMode`, `frameTTL`. Frame persistence: hub decodes base64 from `frame_update`, writes JPEG to `FrameStore`, records metadata in SQLite, broadcasts to dashboards. Graceful shutdown via SIGINT/SIGTERM. Port configurable via `ARGUS_HUB_PORT`.
 
 **probe.ts** — Process wrapper + two-tier VLM pipeline. Two capture modes:
 - **Pipe mode** (default, `ARGUS_PTY=0`): Bun.spawn with piped stdout/stderr, rolling line buffer for screen state.
@@ -83,11 +84,13 @@ Handles commands from hub: SIGSTOP (pause), SIGCONT (resume), SIGKILL (kill), st
 **Dashboard → Hub → Probe:**
 - `command` — `{action: "pause"|"resume"|"kill"|"inject", content?: string}`
 
-**HTTP API (v0.2.3):**
+**HTTP API (v0.2.4):**
 - `GET /api/agents` — all agents (including disconnected)
 - `GET /api/agents/:id/history` — paginated VLM event timeline
 - `GET /api/agents/:id/logs` — paginated logs with `?type=` filter
-- Query params: `limit=100`, `offset=0`, `since=<timestamp>`
+- `GET /api/agents/:id/frames` — paginated frame metadata *(v0.2.4)*
+- `GET /api/frames/:path` — serve actual JPEG file *(v0.2.4)*
+- Query params: `limit=100`, `offset=0`, `since=<timestamp>`, `before=<timestamp>`
 
 ## Environment Variables
 
@@ -103,12 +106,16 @@ All in `.env.example`. Key ones:
 - `ARGUS_PTY` — PTY mode: 0=pipe (default), 1=pty via `script` + `@xterm/headless` *(v0.2.3)*
 - `ARGUS_PTY_COLS` / `ARGUS_PTY_ROWS` — Terminal dimensions in PTY mode (default: 80x24) *(v0.2.3)*
 - `ARGUS_DB_PATH` — SQLite file path; empty = no persistence *(v0.2.3)*
+- `ARGUS_FRAME_PATH` — Frame storage root (default: `/dev/shm/argus-frames` or `/tmp/argus-frames`) *(v0.2.4)*
+- `ARGUS_FRAME_MODE` — `ephemeral` (tmpfs, auto-cleanup) or `persist` (disk, keep all) *(v0.2.4)*
+- `ARGUS_FRAME_TTL` — Auto-cleanup interval in ms, ephemeral mode only (default: `300000`) *(v0.2.4)*
 - `ARGUS_AGENT_TASK` — Agent task description sent in register metadata *(v0.2.3)*
 
 ## Key Files
 
 - `src/hub/hub.ts` — WebSocket relay with agent registry, command routing, HTTP API (`createHub()` factory)
-- `src/hub/db.ts` — SQLite persistence layer using `bun:sqlite` *(v0.2.3)*
+- `src/hub/storage.ts` — StorageLayer abstraction: StorageConfig, FrameStore (filesystem-backed), createStorage factory *(v0.2.4)*
+- `src/hub/db.ts` — SQLite persistence layer using `bun:sqlite` — agents, logs, vlm_events, frames tables *(v0.2.4)*
 - `src/probe/probe.ts` — VLM monitoring pipeline (connects to hub, spawns child process, pipe or PTY mode)
 - `src/probe/probe-utils.ts` — Pure functions extracted from probe (screen buffers, JSON extraction, command handler, pipeStream, pipeToTerminal)
 - `src/probe/terminal.ts` — `@xterm/headless` wrapper with SGR reconstruction for PTY mode *(v0.2.3)*
@@ -123,7 +130,8 @@ All in `.env.example`. Key ones:
 - `tests/unit/hub/` — Hub unit tests (routing, db)
 - `tests/unit/probe/` — Probe unit tests (extract-json, screen-buffer, handle-command, pipe-stream, anomaly-detection, ansi-to-svg, terminal)
 - `tests/unit/app/` — Dashboard unit tests (apply-message)
-- `tests/integration/` — Integration tests (pipeline lifecycle, multi-probe orchestration, pty-pipeline)
+- `tests/unit/hub/storage.test.ts` — FrameStore unit tests *(v0.2.4)*
+- `tests/integration/` — Integration tests (pipeline lifecycle, multi-probe orchestration, pty-pipeline, frame persistence)
 
 ## Tech Stack
 
@@ -132,7 +140,7 @@ All in `.env.example`. Key ones:
 - **Process capture:** Bun.spawn — pipe mode (stdout/stderr) or PTY mode (`script` + `@xterm/headless`)
 - **Terminal emulation:** `@xterm/headless` v6.0.0 — headless xterm for 2D grid capture in PTY mode *(v0.2.3)*
 - **Visual pipeline:** Inline ANSI→SVG renderer + sharp (SVG → JPEG)
-- **Persistence:** `bun:sqlite` — optional SQLite for logs, VLM events, agent state *(v0.2.3)*
+- **Persistence:** `StorageLayer` — SQLite for metadata (agents, logs, VLM events, frame metadata), filesystem for frame JPEGs (tmpfs ephemeral / disk persistent) *(v0.2.4)*
 - **VLM:** OpenAI SDK against any compatible endpoint (text tier1 + vision tier2)
 - **Font:** JetBrains Mono | **Icons:** lucide-react
 

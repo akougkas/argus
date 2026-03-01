@@ -13,7 +13,7 @@ Increment by patch (0.2.x) until 1.0. Each patch is a shippable, tested unit of 
 | v0.2.1 | Project Restructuring + ANSI Hardening | Phase 1 (parser) | Done, tagged |
 | v0.2.2 | Pre-Persistence Hub Hardening | — | Done, tagged |
 | **v0.2.3** | **Persistence + PTY Foundation** | **Phase 1 (validation)** | **Done, tagged** |
-| v0.2.4 | Storage Layer + Frame Persistence | — | Next |
+| **v0.2.4** | **Storage Layer + Frame Persistence** | **—** | **Done, tagged** |
 | v0.2.5 | AWOC Semantic Integration | Phase 2–3 | Planned |
 | v0.2.6 | Actuation (auto-pause, webhooks) | — | Planned |
 | v0.2.7 | Granular Steering + Polish | Phase 4 | Planned |
@@ -123,23 +123,25 @@ Uses `bun:sqlite` (built-in, no dependency).
 
 ---
 
-## v0.2.4 — Storage Layer + Frame Persistence (Next)
+## v0.2.4 — Storage Layer + Frame Persistence (Done)
 
-Introduce `StorageLayer` abstraction and filesystem-backed frame persistence.
-Ephemeral-first: frames default to tmpfs/ramfs, flush to disk on demand.
+Polyglot persistence: SQLite for metadata, filesystem for JPEG blobs.
+Ephemeral-first: frames default to tmpfs, flush to disk on demand.
+Security hardening from Gemini Pro review integrated.
 
-- [ ] `StorageConfig` + `StorageLayer` interface replaces `dbPath?` in `createHub()`
-- [ ] `FrameStore` — filesystem-backed JPEG storage (tmpfs ephemeral / disk persistent)
-- [ ] `frames` table in `db.ts` — metadata only (path, agent_id, timestamp, size_bytes)
-- [ ] Hub stores frames on `frame_update`, broadcasts to dashboard
-- [ ] HTTP API: `GET /api/agents/:id/frames` for historical access
-- [ ] TTL-based auto-cleanup in ephemeral mode
-- [ ] `flush()` to copy frames from tmpfs to persistent disk
-- [ ] AWOC Phase 1 manual validation (PTY mode with htop/vim)
+- [x] `StorageConfig` + `StorageLayer` interface replaces `dbPath?` in `createHub()`
+- [x] `FrameStore` — filesystem-backed JPEG storage (tmpfs ephemeral / disk persistent)
+- [x] `frames` table in `db.ts` — metadata only (path, agent_id, timestamp, size_bytes)
+- [x] Hub stores frames on `frame_update`, broadcasts to dashboard
+- [x] HTTP API: `GET /api/agents/:id/frames` + `GET /api/frames/:path`
+- [x] TTL-based auto-cleanup in ephemeral mode
+- [x] `flush()` to copy frames from tmpfs to persistent disk
+- [x] Security hardening: path traversal fix, 5MB frame size limit, try/catch on all storage ops, hub-authoritative timestamps, async frame writes, reconnect jitter, timer guard, raw relay optimization, cleanup partial failure resilience
+- [x] 12 hardening tests (path traversal, oversized frame, storage error resilience, cleanup)
 
 New env vars: `ARGUS_FRAME_PATH`, `ARGUS_FRAME_MODE`, `ARGUS_FRAME_TTL`
 
-See `docs/session-prompt.md` for full design.
+### Result: 187 tests, 0 failures across 17 files
 
 ## v0.2.5 — AWOC Semantic Integration (Planned)
 
@@ -181,6 +183,6 @@ See `docs/session-prompt.md` for full design.
 | Item | Introduced | Target |
 |------|-----------|--------|
 | No authentication on hub endpoints | v0.1.0 | v0.2.8 |
-| No frame persistence / visual replay | v0.2.0 | v0.2.4 |
-| Dashboard frame pipeline untested in CI | v0.1.0 | v0.2.4 |
+| ~~No frame persistence / visual replay~~ | ~~v0.2.0~~ | ~~v0.2.4~~ Done |
+| Dashboard frame pipeline untested in CI | v0.1.0 | v0.2.5 |
 | useAgentSocket low line coverage (40%) | v0.2.0 | v0.2.5 |

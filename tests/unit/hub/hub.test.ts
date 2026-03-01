@@ -1,4 +1,7 @@
 import { describe, test, expect, afterEach } from "bun:test";
+import { join } from "path";
+import { tmpdir } from "os";
+import { rmSync } from "fs";
 import { createHub, type HubInstance } from "../../../src/hub/hub";
 
 let hub: HubInstance | null = null;
@@ -416,5 +419,45 @@ describe("createHub", () => {
     expect(data["ghost-01"]).toBeUndefined();
 
     dash.close();
+  });
+
+  test("frame_update with frames store writes JPEG and broadcasts", async () => {
+    // Create hub with frame storage using a temp directory
+    const tmpDir = join(tmpdir(), `argus-hub-frames-${Date.now()}`);
+    hub = createHub(0, { dbPath: ":memory:", framePath: tmpDir, frameMode: "persist" });
+
+    const dash = new WebSocket(wsUrl(hub, "/ws/dashboard"));
+    await waitForMessage(dash); // init
+
+    const probe = new WebSocket(wsUrl(hub, "/ws/probe"));
+    await waitForOpen(probe);
+    probe.send(JSON.stringify({ type: "register", agent_id: "frame-test" }));
+    await waitForMessage(dash); // init
+
+    // Send frame_update with base64 JPEG
+    const fakeJpeg = Buffer.from("fake-jpeg-data");
+    const base64 = fakeJpeg.toString("base64");
+    const ts = Date.now();
+    probe.send(JSON.stringify({
+      type: "frame_update",
+      agent_id: "frame-test",
+      frame: base64,
+      timestamp: ts,
+    }));
+
+    const frameMsg = await waitForMessage(dash);
+    expect(frameMsg.type).toBe("frame_update");
+    expect(frameMsg.frame).toBe(base64);
+
+    // Verify frame was stored (async write, hub uses its own timestamp)
+    await Bun.sleep(200);
+    const frames = hub.frames!.getFrames("frame-test");
+    expect(frames.length).toBe(1);
+    expect(frames[0].agent_id).toBe("frame-test");
+    expect(frames[0].timestamp).toBeGreaterThanOrEqual(ts);
+
+    probe.close();
+    dash.close();
+    rmSync(tmpDir, { recursive: true, force: true });
   });
 });

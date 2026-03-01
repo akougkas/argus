@@ -62,6 +62,22 @@ export interface DbInstance {
     type: string;
     timestamp: number;
   }>;
+  insertFrame(
+    agentId: string,
+    timestamp: number,
+    path: string,
+    sizeBytes: number,
+  ): void;
+  getFrames(
+    agentId: string,
+    opts?: { limit?: number; since?: number; before?: number },
+  ): Array<{
+    path: string;
+    agent_id: string;
+    timestamp: number;
+    size_bytes: number;
+  }>;
+  deleteFramesBefore(agentId: string, olderThan: number): number;
   close(): void;
 }
 
@@ -101,6 +117,14 @@ export function createDb(path?: string): DbInstance {
       timestamp INTEGER
     );
     CREATE INDEX IF NOT EXISTS idx_vlm_agent_ts ON vlm_events(agent_id, timestamp);
+    CREATE TABLE IF NOT EXISTS frames (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent_id TEXT,
+      timestamp INTEGER,
+      path TEXT,
+      size_bytes INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_frames_agent_ts ON frames(agent_id, timestamp);
   `);
 
   // Prepared statements
@@ -127,6 +151,14 @@ export function createDb(path?: string): DbInstance {
 
   const stmtInsertVlmEvent = db.prepare(`
     INSERT INTO vlm_events (agent_id, state, confidence, reasoning, timestamp) VALUES (?, ?, ?, ?, ?)
+  `);
+
+  const stmtInsertFrame = db.prepare(`
+    INSERT INTO frames (agent_id, timestamp, path, size_bytes) VALUES (?, ?, ?, ?)
+  `);
+
+  const stmtDeleteFramesBefore = db.prepare(`
+    DELETE FROM frames WHERE agent_id = ? AND timestamp < ?
   `);
 
   const stmtGetAllAgents = db.prepare(`SELECT * FROM agents`);
@@ -189,6 +221,38 @@ export function createDb(path?: string): DbInstance {
           `SELECT * FROM logs WHERE ${where} ORDER BY timestamp DESC LIMIT ? OFFSET ?`,
         )
         .all(...params) as ReturnType<DbInstance["getAgentLogs"]>;
+    },
+
+    insertFrame(agentId, timestamp, path, sizeBytes) {
+      stmtInsertFrame.run(agentId, timestamp, path, sizeBytes);
+    },
+
+    getFrames(agentId, opts = {}) {
+      const { limit = 100, since, before } = opts;
+      const conditions = ["agent_id = ?"];
+      const params: (string | number)[] = [agentId];
+
+      if (since !== undefined) {
+        conditions.push("timestamp >= ?");
+        params.push(since);
+      }
+      if (before !== undefined) {
+        conditions.push("timestamp < ?");
+        params.push(before);
+      }
+
+      params.push(limit);
+      const where = conditions.join(" AND ");
+      return db
+        .prepare(
+          `SELECT path, agent_id, timestamp, size_bytes FROM frames WHERE ${where} ORDER BY timestamp DESC LIMIT ?`,
+        )
+        .all(...params) as ReturnType<DbInstance["getFrames"]>;
+    },
+
+    deleteFramesBefore(agentId, olderThan) {
+      const result = stmtDeleteFramesBefore.run(agentId, olderThan);
+      return result.changes;
     },
 
     close() {

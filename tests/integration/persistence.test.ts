@@ -1,7 +1,7 @@
 import { describe, test, expect, afterEach } from "bun:test";
 import { createHub, type HubInstance } from "../../src/hub/hub";
 import { wsUrl, waitForOpen } from "../helpers";
-import { existsSync, unlinkSync } from "fs";
+import { existsSync, unlinkSync, mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -274,5 +274,55 @@ describe("SQLite persistence through hub", () => {
     expect(res.status).toBe(200);
     const text = await res.text();
     expect(text).toBe("Argus Hub");
+  });
+
+  test("frame_update persists JPEG to disk and records metadata in DB", async () => {
+    const tmpFrame = mkdtempSync(join(tmpdir(), "argus-frames-"));
+
+    hub = createHub(0, { dbPath: ":memory:", framePath: tmpFrame, frameMode: "persist" });
+
+    const probe = new WebSocket(wsUrl(hub, "/ws/probe"));
+    await waitForOpen(probe);
+    probe.send(JSON.stringify({ type: "register", agent_id: "FRAME-01" }));
+    await Bun.sleep(50);
+
+    const fakeJpeg = Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10]); // JPEG magic bytes
+    const beforeSend = Date.now();
+    probe.send(JSON.stringify({
+      type: "frame_update",
+      agent_id: "FRAME-01",
+      frame: fakeJpeg.toString("base64"),
+      timestamp: 0, // hub overrides with Date.now()
+    }));
+    await Bun.sleep(200);
+
+    // Verify DB metadata (hub assigns its own timestamp via Date.now())
+    const dbFrames = hub.db!.getFrames("FRAME-01");
+    expect(dbFrames.length).toBe(1);
+    expect(dbFrames[0].agent_id).toBe("FRAME-01");
+    expect(dbFrames[0].timestamp).toBeGreaterThanOrEqual(beforeSend);
+    expect(dbFrames[0].timestamp).toBeLessThanOrEqual(Date.now());
+    expect(dbFrames[0].size_bytes).toBe(fakeJpeg.length);
+
+    // Verify file on disk
+    expect(existsSync(dbFrames[0].path)).toBe(true);
+
+    // Verify HTTP API for frames metadata
+    const port = hub.server.port;
+    const res = await fetch(`http://localhost:${port}/api/agents/FRAME-01/frames`);
+    expect(res.status).toBe(200);
+    const apiFrames = await res.json();
+    expect(apiFrames.length).toBe(1);
+    expect(apiFrames[0].timestamp).toBe(dbFrames[0].timestamp);
+
+    // Verify serving actual JPEG
+    const frameRes = await fetch(`http://localhost:${port}/api/frames/${encodeURIComponent(dbFrames[0].path)}`);
+    expect(frameRes.status).toBe(200);
+    expect(frameRes.headers.get("content-type")).toBe("image/jpeg");
+    const body = Buffer.from(await frameRes.arrayBuffer());
+    expect(body.length).toBe(fakeJpeg.length);
+
+    probe.close();
+    rmSync(tmpFrame, { recursive: true });
   });
 });

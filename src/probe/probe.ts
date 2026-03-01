@@ -163,6 +163,7 @@ async function captureFrameFromGrid(ansiContent: string): Promise<string> {
 async function startProbe() {
   if (probeStarted) return;
   probeStarted = true;
+  clearIntervals(); // Guard against leaked timers from previous runs
 
   const mode = PTY_MODE ? "PTY" : "pipe";
   console.log(`[probe] Spawning (${mode}): ${SPAWN_CMD.join(" ")}`);
@@ -472,8 +473,10 @@ function connect() {
 
   ws.onclose = () => {
     if (shuttingDown) return;
-    console.log(`[probe] Disconnected. Reconnecting in ${reconnectDelay / 1000}s...`);
-    setTimeout(connect, reconnectDelay);
+    const jitter = Math.random() * 1000;
+    const delay = reconnectDelay + jitter;
+    console.log(`[probe] Disconnected. Reconnecting in ${(delay / 1000).toFixed(1)}s...`);
+    setTimeout(connect, delay);
     reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
   };
 }

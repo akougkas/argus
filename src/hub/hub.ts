@@ -1,5 +1,6 @@
 import type { Server, ServerWebSocket } from "bun";
-import { createDb, type DbInstance } from "./db";
+import { createStorage, type StorageConfig, type StorageLayer, type FrameStore } from "./storage";
+import type { DbInstance } from "./db";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -32,19 +33,33 @@ export interface HubInstance {
   probes: Map<string, ServerWebSocket<WsData>>;
   dashboards: Set<ServerWebSocket<WsData>>;
   db: DbInstance | null;
+  frames: FrameStore | null;
+  storage: StorageLayer;
   stop(): void;
 }
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const MAX_FRAME_BASE64_BYTES = 5 * 1024 * 1024; // 5MB — reject oversized frames
 
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
 
-export function createHub(port: number, dbPath?: string): HubInstance {
+export function createHub(port: number, config?: StorageConfig | string): HubInstance {
   const agents = new Map<string, AgentState>();
   const probes = new Map<string, ServerWebSocket<WsData>>();
   const dashboards = new Set<ServerWebSocket<WsData>>();
   const startTime = Date.now();
-  const db = dbPath !== undefined ? createDb(dbPath) : null;
+
+  // Backwards compat: string arg = dbPath
+  const storageConfig: StorageConfig = typeof config === "string"
+    ? { dbPath: config }
+    : config ?? {};
+  const storage = createStorage(storageConfig);
+  const { db, frames } = storage;
 
   // Preload agents from DB (survives restarts)
   if (db) {
@@ -82,7 +97,7 @@ export function createHub(port: number, dbPath?: string): HubInstance {
     return result;
   }
 
-  function handleProbeMessage(ws: ServerWebSocket<WsData>, msg: Record<string, unknown>) {
+  function handleProbeMessage(ws: ServerWebSocket<WsData>, msg: Record<string, unknown>, raw: string) {
     if (msg.type === "register") {
       const id = msg.agent_id as string | undefined;
       if (!id) return;
@@ -111,9 +126,13 @@ export function createHub(port: number, dbPath?: string): HubInstance {
           connected: true,
         });
       }
-      // Persist to DB
+      // Persist to DB (non-fatal on failure)
       const a = agents.get(id)!;
-      db?.insertAgent(id, a.state, a.confidence, a.reasoning, a.task, a.command, a.startTime, a.lastSeen);
+      try {
+        db?.insertAgent(id, a.state, a.confidence, a.reasoning, a.task, a.command, a.startTime, a.lastSeen);
+      } catch (e) {
+        console.error(`[hub] DB insertAgent failed for ${id}:`, e);
+      }
 
       console.log(`[hub] Probe registered: ${id}`);
       broadcastJSON({ type: "init", data: Object.fromEntries(connectedAgents()) });
@@ -136,9 +155,38 @@ export function createHub(port: number, dbPath?: string): HubInstance {
       agentState.confidence = (data?.confidence_score as number) ?? agentState.confidence;
       agentState.reasoning = (data?.reasoning as string) || "";
       const now = Date.now();
-      db?.insertVlmEvent(agentId, agentState.state, agentState.confidence, agentState.reasoning, now);
-      db?.updateAgentState(agentId, agentState.state, agentState.confidence, agentState.reasoning, now);
+      try {
+        db?.insertVlmEvent(agentId, agentState.state, agentState.confidence, agentState.reasoning, now);
+        db?.updateAgentState(agentId, agentState.state, agentState.confidence, agentState.reasoning, now);
+      } catch (e) {
+        console.error(`[hub] DB vlm_update failed for ${agentId}:`, e);
+      }
       broadcastJSON({ type: "update", agent_id: agentId, data: msg.data });
+      return;
+    }
+
+    if (msg.type === "frame_update") {
+      const base64 = msg.frame as string | undefined;
+      if (!base64) {
+        broadcast(raw);
+        return;
+      }
+      // Reject oversized frames (OOM protection)
+      if (base64.length > MAX_FRAME_BASE64_BYTES) {
+        console.warn(`[hub] Rejecting oversized frame from ${agentId}: ${base64.length} bytes`);
+        return;
+      }
+      // Store frame if persistence enabled (fire-and-forget async, non-fatal)
+      if (frames) {
+        const jpegBuffer = Buffer.from(base64, "base64");
+        // Hub-authoritative timestamp for TTL safety (probe clock may be skewed)
+        const timestamp = Date.now();
+        frames.writeFrame(agentId, timestamp, jpegBuffer).catch((e) => {
+          console.error(`[hub] Frame write failed for ${agentId}:`, e);
+        });
+      }
+      // Relay raw message to dashboards (zero re-serialization)
+      broadcast(raw);
       return;
     }
 
@@ -146,10 +194,14 @@ export function createHub(port: number, dbPath?: string): HubInstance {
       const log = msg.log as { text: string; type: string };
       agentState.logs.push(log);
       if (agentState.logs.length > 50) agentState.logs.shift();
-      db?.insertLog(agentId, log.text, log.type, Date.now());
+      try {
+        db?.insertLog(agentId, log.text, log.type, Date.now());
+      } catch (e) {
+        console.error(`[hub] DB insertLog failed for ${agentId}:`, e);
+      }
     }
 
-    broadcast(JSON.stringify(msg));
+    broadcast(raw);
   }
 
   function handleDashboardMessage(_ws: ServerWebSocket<WsData>, msg: Record<string, unknown>) {
@@ -210,6 +262,34 @@ export function createHub(port: number, dbPath?: string): HubInstance {
         return Response.json(db.getAgentLogs(agentId, { limit, offset, since, type }));
       }
 
+      // Frame metadata endpoint
+      const framesMatch = url.pathname.match(/^\/api\/agents\/([^/]+)\/frames$/);
+      if (db && framesMatch && req.method === "GET") {
+        const agentId = decodeURIComponent(framesMatch[1]);
+        const limit = parseInt(url.searchParams.get("limit") || "100");
+        const sinceRaw = url.searchParams.get("since");
+        const since = sinceRaw ? parseInt(sinceRaw) : undefined;
+        const beforeRaw = url.searchParams.get("before");
+        const before = beforeRaw ? parseInt(beforeRaw) : undefined;
+        return Response.json(db.getFrames(agentId, { limit, since, before }));
+      }
+
+      // Serve actual JPEG frame file
+      const frameFileMatch = url.pathname.match(/^\/api\/frames\/(.+)$/);
+      if (frames && frameFileMatch && req.method === "GET") {
+        const framePath = decodeURIComponent(frameFileMatch[1]);
+        // Resolve relative to frame store root
+        const fullPath = framePath.startsWith("/") ? framePath : `${frames.rootPath}/${framePath}`;
+        const buffer = frames.getFrame(fullPath);
+        if (!buffer) {
+          return new Response("Frame not found", { status: 404 });
+        }
+        return new Response(new Uint8Array(buffer), {
+          status: 200,
+          headers: { "Content-Type": "image/jpeg" },
+        });
+      }
+
       if (url.pathname === "/ws/probe") {
         return server.upgrade(req, { data: { type: "probe" } as WsData })
           ? undefined
@@ -236,15 +316,16 @@ export function createHub(port: number, dbPath?: string): HubInstance {
       },
 
       message(ws: ServerWebSocket<WsData>, raw) {
+        const rawStr = raw as string;
         let payload: Record<string, unknown>;
         try {
-          payload = JSON.parse(raw as string);
+          payload = JSON.parse(rawStr);
         } catch {
           console.error("[hub] Invalid JSON from", ws.data.type);
           return;
         }
 
-        if (ws.data.type === "probe") handleProbeMessage(ws, payload);
+        if (ws.data.type === "probe") handleProbeMessage(ws, payload, rawStr);
         else if (ws.data.type === "dashboard") handleDashboardMessage(ws, payload);
       },
 
@@ -274,9 +355,11 @@ export function createHub(port: number, dbPath?: string): HubInstance {
     probes,
     dashboards,
     db,
+    frames,
+    storage,
     stop() {
       server.stop(true);
-      db?.close();
+      storage.close();
     },
   };
 
@@ -290,9 +373,20 @@ export function createHub(port: number, dbPath?: string): HubInstance {
 if (import.meta.main) {
   const PORT = parseInt(process.env.ARGUS_HUB_PORT || "8000");
   const DB_PATH = process.env.ARGUS_DB_PATH || undefined;
-  const hub = createHub(PORT, DB_PATH);
+  const FRAME_PATH = process.env.ARGUS_FRAME_PATH || undefined;
+  const FRAME_MODE = (process.env.ARGUS_FRAME_MODE || "ephemeral") as "ephemeral" | "persist";
+  const FRAME_TTL = parseInt(process.env.ARGUS_FRAME_TTL || "300000");
+
+  const hub = createHub(PORT, {
+    dbPath: DB_PATH,
+    framePath: FRAME_PATH,
+    frameMode: FRAME_MODE,
+    frameTTL: FRAME_TTL,
+  });
+
   console.log(`[hub] Argus Hub running on ws://localhost:${PORT}`);
   if (DB_PATH) console.log(`[hub] SQLite persistence: ${DB_PATH}`);
+  if (hub.frames) console.log(`[hub] Frame storage: ${hub.frames.rootPath} (${FRAME_MODE})`);
 
   function shutdown() {
     console.log("[hub] Shutting down...");

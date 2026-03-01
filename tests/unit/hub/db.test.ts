@@ -162,4 +162,94 @@ describe("createDb", () => {
     expect(() => db!.close()).not.toThrow();
     db = null; // prevent afterEach from double-closing
   });
+
+  describe("frame methods", () => {
+    test("insertFrame + getFrames returns frames in DESC order", () => {
+      db = createDb();
+      db.insertFrame("A-01", 1000, "/tmp/frame1.jpg", 5000);
+      db.insertFrame("A-01", 2000, "/tmp/frame2.jpg", 6000);
+      db.insertFrame("A-01", 3000, "/tmp/frame3.jpg", 7000);
+      const frames = db.getFrames("A-01");
+      expect(frames).toHaveLength(3);
+      expect(frames[0].timestamp).toBe(3000);
+      expect(frames[1].timestamp).toBe(2000);
+      expect(frames[2].timestamp).toBe(1000);
+    });
+
+    test("getFrames with limit", () => {
+      db = createDb();
+      for (let i = 0; i < 10; i++) {
+        db.insertFrame("A-01", 1000 + i, `/tmp/frame${i}.jpg`, 5000 + i);
+      }
+      const frames = db.getFrames("A-01", { limit: 3 });
+      expect(frames).toHaveLength(3);
+      expect(frames[0].timestamp).toBe(1009); // newest first
+      expect(frames[2].timestamp).toBe(1007);
+    });
+
+    test("getFrames with since filter", () => {
+      db = createDb();
+      db.insertFrame("A-01", 1000, "/tmp/old.jpg", 5000);
+      db.insertFrame("A-01", 2000, "/tmp/mid.jpg", 6000);
+      db.insertFrame("A-01", 3000, "/tmp/new.jpg", 7000);
+      const frames = db.getFrames("A-01", { since: 2000 });
+      expect(frames).toHaveLength(2);
+      expect(frames[0].timestamp).toBe(3000);
+      expect(frames[1].timestamp).toBe(2000);
+    });
+
+    test("getFrames with before filter", () => {
+      db = createDb();
+      db.insertFrame("A-01", 1000, "/tmp/old.jpg", 5000);
+      db.insertFrame("A-01", 2000, "/tmp/mid.jpg", 6000);
+      db.insertFrame("A-01", 3000, "/tmp/new.jpg", 7000);
+      const frames = db.getFrames("A-01", { before: 3000 });
+      expect(frames).toHaveLength(2);
+      expect(frames[0].timestamp).toBe(2000);
+      expect(frames[1].timestamp).toBe(1000);
+    });
+
+    test("getFrames combined since + before", () => {
+      db = createDb();
+      db.insertFrame("A-01", 1000, "/tmp/f1.jpg", 5000);
+      db.insertFrame("A-01", 2000, "/tmp/f2.jpg", 6000);
+      db.insertFrame("A-01", 3000, "/tmp/f3.jpg", 7000);
+      db.insertFrame("A-01", 4000, "/tmp/f4.jpg", 8000);
+      const frames = db.getFrames("A-01", { since: 2000, before: 4000 });
+      expect(frames).toHaveLength(2);
+      expect(frames[0].timestamp).toBe(3000);
+      expect(frames[1].timestamp).toBe(2000);
+    });
+
+    test("deleteFramesBefore removes old frames and returns count", () => {
+      db = createDb();
+      db.insertFrame("A-01", 1000, "/tmp/f1.jpg", 5000);
+      db.insertFrame("A-01", 2000, "/tmp/f2.jpg", 6000);
+      db.insertFrame("A-01", 3000, "/tmp/f3.jpg", 7000);
+      const deleted = db.deleteFramesBefore("A-01", 2500);
+      expect(deleted).toBe(2);
+      const remaining = db.getFrames("A-01");
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0].timestamp).toBe(3000);
+    });
+
+    test("deleteFramesBefore returns 0 when nothing to delete", () => {
+      db = createDb();
+      db.insertFrame("A-01", 5000, "/tmp/f1.jpg", 5000);
+      const deleted = db.deleteFramesBefore("A-01", 1000);
+      expect(deleted).toBe(0);
+      expect(db.getFrames("A-01")).toHaveLength(1);
+    });
+
+    test("getFrames returns correct fields", () => {
+      db = createDb();
+      db.insertFrame("A-01", 1234, "/dev/shm/argus-frames/A-01/frame-1234.jpg", 98765);
+      const frames = db.getFrames("A-01");
+      expect(frames).toHaveLength(1);
+      expect(frames[0].path).toBe("/dev/shm/argus-frames/A-01/frame-1234.jpg");
+      expect(frames[0].agent_id).toBe("A-01");
+      expect(frames[0].timestamp).toBe(1234);
+      expect(frames[0].size_bytes).toBe(98765);
+    });
+  });
 });
