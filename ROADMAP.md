@@ -10,7 +10,7 @@ AWOC integration phases are folded into version milestones — Argus remains a s
 | v0.1.0 | Testable Foundation | — | Done, tagged |
 | v0.2.0 | Multi-Agent Reliability | — | Done, tagged |
 | v0.2.1 | Project Restructuring + ANSI Hardening | Phase 1 (parser) | Done, committed |
-| **v0.3.0** | **Persistence + PTY Foundation** | **Phase 1 (validation)** | **Next** |
+| **v0.3.0** | **Persistence + PTY Foundation** | **Phase 1 (validation)** | **Done, tagged** |
 | v0.4.0 | Semantic Integration + Actuation | Phase 2–3 | Planned |
 | v0.5.0 | Beta: Monitors AWOC in Production | Phase 4 | Planned |
 
@@ -66,50 +66,50 @@ Two independent tracks (PTY, SQLite) converging with agent metadata.
 
 New dep: `@xterm/headless` v6.0.0 (zero deps, production)
 
-- [ ] `src/probe/terminal.ts` — wraps `@xterm/headless` Terminal
+- [x] `src/probe/terminal.ts` — wraps `@xterm/headless` Terminal
   - `createTerminal(cols, rows)` → `TerminalWrapper`
   - `write(data)` — feed raw PTY bytes
   - `getGrid()` → `{ text, ansi }` — plain text + reconstructed SGR codes
   - SGR reconstruction: walk cells, track style changes, emit codes on transitions
   - Pure module, no WebSocket/process concerns
-- [ ] `pipeToTerminal()` in `src/probe/probe-utils.ts` — reads chunks, feeds terminal, extracts log lines
-- [ ] PTY mode in `src/probe/probe.ts` (behind `ARGUS_PTY=1`)
+- [x] `pipeToTerminal()` in `src/probe/probe-utils.ts` — reads chunks, feeds terminal, extracts log lines
+- [x] PTY mode in `src/probe/probe.ts` (behind `ARGUS_PTY=1`)
   - Wraps command in `script -qefc "stty rows R cols C; exec CMD" /dev/null`
   - Sets `TERM=xterm-256color` in spawn env
   - Screen broadcast from `terminal.getGrid().text`
   - Frame capture from `terminal.getGrid().ansi` → `ansiToSvg()`
   - Pipe mode (default `ARGUS_PTY=0`) unchanged
-- [ ] `tests/unit/probe/terminal.test.ts` (~10 tests): grid text, cursor, SGR, alternate screen, resize
-- [ ] `tests/integration/pty-pipeline.test.ts` (~3 tests): spawn via script, verify grid
+- [x] `tests/unit/probe/terminal.test.ts` (~10 tests): grid text, cursor, SGR, alternate screen, resize
+- [x] `tests/integration/pty-pipeline.test.ts` (~3 tests): spawn via script, verify grid
 
 ### Track B: SQLite Persistence
 
 Uses `bun:sqlite` (built-in, no dependency).
 
-- [ ] `src/hub/db.ts`
+- [x] `src/hub/db.ts`
   - `createDb(path?)` → `DbInstance`
   - Schema: `agents`, `logs`, `vlm_events` (indexed on `(agent_id, timestamp)`)
   - `:memory:` for tests, file path for production (`ARGUS_DB_PATH`)
   - No frames table (deferred to v0.4.0)
-- [ ] Hub integration: `createHub(port, dbPath?)`
+- [x] Hub integration: `createHub(port, dbPath?)`
   - On register: upsert agent
   - On vlm_update: insert event + update state
   - On log_update: insert log
   - On startup: preload agents from DB (survives restarts)
-- [ ] HTTP API in hub `fetch()`:
+- [x] HTTP API in hub `fetch()`:
   - `GET /api/agents` — all agents (including disconnected)
   - `GET /api/agents/:id/history` — paginated timeline
   - `GET /api/agents/:id/logs` — paginated logs with `?type=` filter
   - Query params: `limit=100`, `offset=0`, `since=<timestamp>`
-- [ ] `tests/unit/hub/db.test.ts` (~10 tests): CRUD, pagination, upsert, ordering
-- [ ] Extended integration tests for persistence through restart + HTTP API
+- [x] `tests/unit/hub/db.test.ts` (~10 tests): CRUD, pagination, upsert, ordering
+- [x] Extended integration tests for persistence through restart + HTTP API
 
 ### Track C: Agent Metadata
 
-- [ ] `register` message gains optional `metadata: { task, command, start_time }`
-- [ ] Probe reads `ARGUS_AGENT_TASK`, auto-populates command from SPAWN_CMD
-- [ ] Hub: `AgentState` gains `task`, `command`, `startTime` fields
-- [ ] Dashboard: `applyMessage()` populates metadata from `init`
+- [x] `register` message gains optional `metadata: { task, command, start_time }`
+- [x] Probe reads `ARGUS_AGENT_TASK`, auto-populates command from SPAWN_CMD
+- [x] Hub: `AgentState` gains `task`, `command`, `startTime` fields
+- [x] Dashboard: `applyMessage()` populates metadata from `init`
 
 ### Track D: AWOC Phase 1 Validation
 
@@ -142,7 +142,7 @@ Manual validation after PTY works:
 - `ARGUS_DB_PATH=` — SQLite path (empty = no persistence)
 - `ARGUS_AGENT_TASK=` — Agent task description
 
-### Expected: ~125 tests, 0 failures
+### Result: 146 tests, 0 failures
 
 ---
 

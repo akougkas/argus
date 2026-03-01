@@ -1,4 +1,5 @@
 import type { Server, ServerWebSocket } from "bun";
+import { createDb, type DbInstance } from "./db";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -30,6 +31,7 @@ export interface HubInstance {
   agents: Map<string, AgentState>;
   probes: Map<string, ServerWebSocket<WsData>>;
   dashboards: Set<ServerWebSocket<WsData>>;
+  db: DbInstance | null;
   stop(): void;
 }
 
@@ -37,11 +39,32 @@ export interface HubInstance {
 // Factory
 // ---------------------------------------------------------------------------
 
-export function createHub(port: number): HubInstance {
+export function createHub(port: number, dbPath?: string): HubInstance {
   const agents = new Map<string, AgentState>();
   const probes = new Map<string, ServerWebSocket<WsData>>();
   const dashboards = new Set<ServerWebSocket<WsData>>();
   const startTime = Date.now();
+  const db = dbPath !== undefined ? createDb(dbPath) : null;
+
+  // Preload agents from DB (survives restarts)
+  if (db) {
+    for (const row of db.getAllAgents()) {
+      agents.set(row.id, {
+        state: row.state,
+        confidence: row.confidence,
+        reasoning: row.reasoning,
+        logs: [],
+        task: row.task,
+        command: row.command,
+        startTime: row.start_time,
+        lastSeen: row.last_seen,
+        connected: false,
+      });
+    }
+    if (agents.size > 0) {
+      console.log(`[hub] Preloaded ${agents.size} agent(s) from DB`);
+    }
+  }
 
   function broadcast(msg: string) {
     for (const d of dashboards) d.send(msg);
@@ -88,6 +111,10 @@ export function createHub(port: number): HubInstance {
           connected: true,
         });
       }
+      // Persist to DB
+      const a = agents.get(id)!;
+      db?.insertAgent(id, a.state, a.confidence, a.reasoning, a.task, a.command, a.startTime, a.lastSeen);
+
       console.log(`[hub] Probe registered: ${id}`);
       broadcastJSON({ type: "init", data: Object.fromEntries(connectedAgents()) });
       return;
@@ -108,6 +135,9 @@ export function createHub(port: number): HubInstance {
       agentState.state = (data?.agent_state as string) || "PROGRESSING";
       agentState.confidence = (data?.confidence_score as number) ?? agentState.confidence;
       agentState.reasoning = (data?.reasoning as string) || "";
+      const now = Date.now();
+      db?.insertVlmEvent(agentId, agentState.state, agentState.confidence, agentState.reasoning, now);
+      db?.updateAgentState(agentId, agentState.state, agentState.confidence, agentState.reasoning, now);
       broadcastJSON({ type: "update", agent_id: agentId, data: msg.data });
       return;
     }
@@ -116,6 +146,7 @@ export function createHub(port: number): HubInstance {
       const log = msg.log as { text: string; type: string };
       agentState.logs.push(log);
       if (agentState.logs.length > 50) agentState.logs.shift();
+      db?.insertLog(agentId, log.text, log.type, Date.now());
     }
 
     broadcast(JSON.stringify(msg));
@@ -153,6 +184,32 @@ export function createHub(port: number): HubInstance {
           headers: { "Content-Type": "application/json" },
         });
       }
+      // REST API (requires DB)
+      if (db && url.pathname === "/api/agents" && req.method === "GET") {
+        return Response.json(db.getAllAgents());
+      }
+
+      const historyMatch = url.pathname.match(/^\/api\/agents\/([^/]+)\/history$/);
+      if (db && historyMatch && req.method === "GET") {
+        const agentId = decodeURIComponent(historyMatch[1]);
+        const limit = parseInt(url.searchParams.get("limit") || "100");
+        const offset = parseInt(url.searchParams.get("offset") || "0");
+        const sinceRaw = url.searchParams.get("since");
+        const since = sinceRaw ? parseInt(sinceRaw) : undefined;
+        return Response.json(db.getAgentHistory(agentId, { limit, offset, since }));
+      }
+
+      const logsMatch = url.pathname.match(/^\/api\/agents\/([^/]+)\/logs$/);
+      if (db && logsMatch && req.method === "GET") {
+        const agentId = decodeURIComponent(logsMatch[1]);
+        const limit = parseInt(url.searchParams.get("limit") || "100");
+        const offset = parseInt(url.searchParams.get("offset") || "0");
+        const sinceRaw = url.searchParams.get("since");
+        const since = sinceRaw ? parseInt(sinceRaw) : undefined;
+        const type = url.searchParams.get("type") || undefined;
+        return Response.json(db.getAgentLogs(agentId, { limit, offset, since, type }));
+      }
+
       if (url.pathname === "/ws/probe") {
         return server.upgrade(req, { data: { type: "probe" } as WsData })
           ? undefined
@@ -216,8 +273,10 @@ export function createHub(port: number): HubInstance {
     agents,
     probes,
     dashboards,
+    db,
     stop() {
       server.stop(true);
+      db?.close();
     },
   };
 
@@ -230,8 +289,10 @@ export function createHub(port: number): HubInstance {
 
 if (import.meta.main) {
   const PORT = parseInt(process.env.ARGUS_HUB_PORT || "8000");
-  const hub = createHub(PORT);
+  const DB_PATH = process.env.ARGUS_DB_PATH || undefined;
+  const hub = createHub(PORT, DB_PATH);
   console.log(`[hub] Argus Hub running on ws://localhost:${PORT}`);
+  if (DB_PATH) console.log(`[hub] SQLite persistence: ${DB_PATH}`);
 
   function shutdown() {
     console.log("[hub] Shutting down...");
