@@ -8,9 +8,13 @@ import {
   compositeGrid,
   handleCommand,
   pipeStream,
+  pipeToTerminal,
   resetState,
   type CommandPayload,
 } from "./probe-utils";
+import { createTerminal, type TerminalWrapper } from "./terminal";
+import { ansiToSvg } from "./ansi-to-svg";
+import sharp from "sharp";
 
 // ---------------------------------------------------------------------------
 // Configuration (all from env vars or CLI args)
@@ -29,6 +33,9 @@ const SCREEN_INTERVAL = parseInt(process.env.ARGUS_SCREEN_INTERVAL || "250");
 const FRAME_INTERVAL = parseInt(process.env.ARGUS_FRAME_INTERVAL || "2000");
 const TIER1_COOLDOWN = parseInt(process.env.ARGUS_TIER1_COOLDOWN || "5000");
 const AGENT_TASK = process.env.ARGUS_AGENT_TASK || "";
+const PTY_MODE = process.env.ARGUS_PTY === "1";
+const PTY_COLS = parseInt(process.env.ARGUS_PTY_COLS || "80");
+const PTY_ROWS = parseInt(process.env.ARGUS_PTY_ROWS || "24");
 
 // CLI: `bun run probe.ts -- python3 my_agent.py`  (default: demo_agent.ts)
 const cliArgs = process.argv.slice(2);
@@ -46,6 +53,7 @@ const LLAMA_CPP_NO_THINK = { chat_template_kwargs: { enable_thinking: false } };
 
 let ws: WebSocket;
 let childProc: ReturnType<typeof Bun.spawn> | null = null;
+let terminal: TerminalWrapper | null = null;
 let probeStarted = false;
 let isDeepReasoning = false;
 let isFastPerceptionRunning = false;
@@ -136,20 +144,51 @@ function shutdown() {
 // Subprocess + Monitoring pipeline
 // ---------------------------------------------------------------------------
 
+/** Capture a frame from the terminal grid (PTY mode). */
+async function captureFrameFromGrid(ansiContent: string): Promise<string> {
+  if (!ansiContent.trim()) return "";
+  const svg = ansiToSvg(ansiContent, {
+    fontFace: "JetBrains Mono, Courier",
+    fontSize: 14,
+    lineHeight: 18,
+    colors: { backgroundColor: "#0a0a0a", foregroundColor: "#00ff41" },
+  });
+  const jpeg = await sharp(Buffer.from(svg))
+    .resize(960, 540, { fit: "contain", background: "#0a0a0a" })
+    .jpeg({ quality: 60 })
+    .toBuffer();
+  return jpeg.toString("base64");
+}
+
 async function startProbe() {
   if (probeStarted) return;
   probeStarted = true;
 
-  console.log(`[probe] Spawning: ${SPAWN_CMD.join(" ")}`);
+  const mode = PTY_MODE ? "PTY" : "pipe";
+  console.log(`[probe] Spawning (${mode}): ${SPAWN_CMD.join(" ")}`);
 
   try {
-    childProc = Bun.spawn(SPAWN_CMD, {
-      cwd: process.cwd(),
-      env: { ...process.env, FORCE_COLOR: "1" },
-      stdout: "pipe",
-      stderr: "pipe",
-      stdin: "pipe",
-    });
+    if (PTY_MODE) {
+      // PTY mode: wrap command in `script` for real PTY allocation
+      const innerCmd = `stty rows ${PTY_ROWS} cols ${PTY_COLS} 2>/dev/null; exec ${SPAWN_CMD.join(" ")}`;
+      childProc = Bun.spawn(["script", "-qefc", innerCmd, "/dev/null"], {
+        cwd: process.cwd(),
+        env: { ...process.env, FORCE_COLOR: "1", TERM: "xterm-256color" },
+        stdout: "pipe",
+        stderr: "pipe",
+        stdin: "pipe",
+      });
+      terminal = createTerminal(PTY_COLS, PTY_ROWS);
+    } else {
+      // Pipe mode: direct spawn (default)
+      childProc = Bun.spawn(SPAWN_CMD, {
+        cwd: process.cwd(),
+        env: { ...process.env, FORCE_COLOR: "1" },
+        stdout: "pipe",
+        stderr: "pipe",
+        stdin: "pipe",
+      });
+    }
   } catch (e) {
     console.error(`[probe] Failed to spawn:`, e);
     sendLog(`Failed to spawn: ${e instanceof Error ? e.message : String(e)}`, "error");
@@ -157,23 +196,32 @@ async function startProbe() {
     return;
   }
 
-  // Read stdout and stderr streams
-  pipeStream(childProc.stdout as ReadableStream<Uint8Array> | null, "stdout", sendLog);
-  pipeStream(childProc.stderr as ReadableStream<Uint8Array> | null, "stderr", sendLog);
+  // Read streams
+  if (PTY_MODE && terminal) {
+    // PTY: feed stdout to terminal emulator (stderr merged into PTY stdout)
+    pipeToTerminal(childProc.stdout as ReadableStream<Uint8Array> | null, terminal, sendLog);
+  } else {
+    // Pipe: separate stdout/stderr streams
+    pipeStream(childProc.stdout as ReadableStream<Uint8Array> | null, "stdout", sendLog);
+    pipeStream(childProc.stderr as ReadableStream<Uint8Array> | null, "stderr", sendLog);
+  }
 
-  // Wait for exit — BUG-3 fix: send EXITED state
+  // Wait for exit
   childProc.exited.then((code) => {
     console.log(`[probe] Agent exited with code ${code}`);
     sendLog(`Agent exited (code ${code})`, "system");
     sendVlmState("EXITED", 100, `Agent exited (code ${code})`);
     clearIntervals();
+    if (terminal) { terminal.dispose(); terminal = null; }
     childProc = null;
     probeStarted = false;
   });
 
   // Screen broadcast loop
   screenIntervalId = setInterval(() => {
-    const screen = getScreen();
+    const screen = (PTY_MODE && terminal)
+      ? terminal.getGrid().text
+      : getScreen();
     if (screen && screen !== lastBroadcastedScreen) {
       send({ type: "terminal_screen_update", agent_id: AGENT_ID, screen });
       lastBroadcastedScreen = screen;
@@ -184,7 +232,14 @@ async function startProbe() {
   frameIntervalId = setInterval(async () => {
     if (operatorOverride || lastSentState === "EXITED") return;
     try {
-      const frame = await captureFrame();
+      let frame: string;
+      if (PTY_MODE && terminal) {
+        // PTY: capture from terminal grid ANSI output
+        frame = await captureFrameFromGrid(terminal.getGrid().ansi);
+      } else {
+        // Pipe: capture from raw screen buffer
+        frame = await captureFrame();
+      }
       if (frame) {
         const buf = Buffer.from(frame, "base64");
         pushFrame(buf);
@@ -323,7 +378,7 @@ Reply ONLY with a raw, valid JSON object:
     if (!usedVision) {
       // Text fallback: use current screen content
       console.log("[tier2] Text fallback mode");
-      const currentScreen = getScreen();
+      const currentScreen = (PTY_MODE && terminal) ? terminal.getGrid().text : getScreen();
 
       response = await openai.chat.completions.create(
         {
@@ -389,7 +444,7 @@ function connect() {
     // Re-send current state on reconnect (probe already running)
     if (probeStarted) {
       sendVlmState(lastSentState, lastSentConfidence, lastSentReasoning);
-      const screen = getScreen();
+      const screen = (PTY_MODE && terminal) ? terminal.getGrid().text : getScreen();
       if (screen) send({ type: "terminal_screen_update", agent_id: AGENT_ID, screen });
     }
 

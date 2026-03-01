@@ -1,5 +1,6 @@
 import { ansiToSvg } from "./ansi-to-svg";
 import sharp from "sharp";
+import type { TerminalWrapper } from "./terminal";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -265,6 +266,47 @@ export async function pipeStream(
     const msg = e instanceof Error ? e.message : String(e);
     if (msg !== "Stream closed") {
       console.error(`[probe] pipeStream(${label}) error:`, msg);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PTY stream reader — feeds raw PTY output into xterm terminal + log lines
+// ---------------------------------------------------------------------------
+
+export async function pipeToTerminal(
+  stream: ReadableStream<Uint8Array> | null | undefined,
+  terminal: TerminalWrapper,
+  sendLog: (text: string, type?: string) => void,
+): Promise<void> {
+  if (!stream) return;
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let lastLineCount = 0;
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      const raw = decoder.decode(value, { stream: true });
+      await terminal.write(raw);
+
+      // Extract new log lines by diffing grid state
+      const grid = terminal.getGrid();
+      const lines = grid.text.split("\n").filter((l) => l.trim());
+      const newLines = lines.slice(lastLineCount);
+      lastLineCount = lines.length;
+
+      for (const line of newLines) {
+        const isError = /error|exception|fatal|✖/i.test(line);
+        sendLog(line, isError ? "error" : "info");
+      }
+    }
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg !== "Stream closed") {
+      console.error(`[probe] pipeToTerminal error:`, msg);
     }
   }
 }
