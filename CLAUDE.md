@@ -131,7 +131,10 @@ All in `.env.example`. Key ones:
 - `tests/unit/probe/` — Probe unit tests (extract-json, screen-buffer, handle-command, pipe-stream, anomaly-detection, ansi-to-svg, terminal)
 - `tests/unit/app/` — Dashboard unit tests (apply-message)
 - `tests/unit/hub/storage.test.ts` — FrameStore unit tests *(v0.2.4)*
+- `tests/unit/hub/hardening.test.ts` — Security hardening tests (path traversal, oversized frame, error resilience) *(v0.2.4)*
 - `tests/integration/` — Integration tests (pipeline lifecycle, multi-probe orchestration, pty-pipeline, frame persistence)
+- `docs/awoc-integration-plan.md` — Full AWOC integration strategy (4 phases, 2-tier architecture)
+- `docs/awoc-sync.md` — Coordination requests to AWOC team (telemetry extension, steering, run IDs)
 
 ## Tech Stack
 
