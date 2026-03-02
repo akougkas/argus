@@ -1,76 +1,103 @@
-# Session: v0.2.8 — Beta
+# Session: v0.2.7 Validation — End-to-End Hardening
 
 ## Context
 
-**v0.2.7 complete and tagged.** Steering UX + Dashboard Controls. Telemetry data wired into dashboard — sidebar shows run ID, active tool, context % bar. Steering buttons (Halt Run, Steer Agent) conditionally appear when telemetry is active. Agent cards show CTX % badge.
+**v0.2.7 tagged.** Seven versions of features built without live validation against an actual running dashboard. Time to stop building and start testing. This session is about running the full pipeline, opening the dashboard in a browser, and verifying everything works visually and functionally.
 
-**329 tests, 0 failures** across 21 test files. Lint clean. Build clean.
+**No version bumps.** This is hardening, debugging, and validation only.
 
-**Versioning:** Patch-level increments (0.2.x) until 1.0.
+**329 tests, 0 failures** across 21 test files. Lint clean. Build clean. But unit tests don't catch visual bugs, WebSocket timing issues, or UI regressions.
 
-**Git tags:** v0.1.0 → v0.2.0 → v0.2.1 → v0.2.2 → v0.2.3 → v0.2.4 → v0.2.5 → v0.2.6 → v0.2.7
+## What to Do
 
-## The Big Picture
+### Phase 1: Bring Up the Pipeline
 
-**Progression:**
-1. **Visual baseline** (done, v0.1–v0.2.4) — VLM classifies state from screenshots.
-2. **Semantic hook** (done, v0.2.5) — Telemetry receiver + Tier2 enrichment.
-3. **Actuation** (done, v0.2.6) — Steering commands, integration tests.
-4. **Steering UX** (done, v0.2.7) — Dashboard UI for per-run control.
-5. **Beta** (v0.2.8, this session) — CLI entry point, auth, docs, 5 simultaneous AWOC probes.
+1. **Start the hub** — `bun run dev:hub` (port 8000)
+2. **Start the dashboard** — `bun run dev:dashboard` (Next.js dev server)
+3. **Open the dashboard in Chrome** — use browser automation tools
+4. **Start the demo probe** — `bun run dev:probe` (wraps demo_agent.ts)
+5. **Verify**: Agent appears in sidebar, card renders, terminal feed shows output
 
-**Endgame (v0.2.8):** 5 simultaneous AWOC probes under Argus with per-run targeted steering from the dashboard. Ready for first users.
+### Phase 2: Visual Validation
 
-## AWOC Coordination Status
+Use browser automation (`mcp__claude-in-chrome__*`) to verify:
 
-| # | Request | Argus Side | AWOC Side |
-|---|---------|-----------|-----------|
-| 1 | Telemetry extension | **Done** (v0.2.5) | **Not started** |
-| 2 | Graceful stdin injection | **Done** (v0.2.6) — stoprun/steer translation | **Needs validation** |
-| 3 | Run ID visibility | N/A | **May already work** |
+- [ ] Agent card renders with correct state badge, confidence, task
+- [ ] Terminal feed scrolls with log entries
+- [ ] Frame/PTY screen updates display correctly
+- [ ] VLM state transitions (PROGRESSING → STUCK → DANGEROUS) reflected in UI
+- [ ] State-specific styling: danger red flash, warning yellow, paused blue, exited gray
+- [ ] Overlay alerts appear for DANGEROUS/STUCK/PAUSED/EXITED states
+- [ ] Connection indicator shows LIVE (green dot) when connected
+- [ ] Connection indicator shows RECONNECTING (red dot) when hub is down
 
-## What to Build in v0.2.8
+### Phase 3: Sidebar Controls
 
-### CLI Entry Point
-1. **`src/cli.ts`** — `bunx argus -- <cmd>` entry point
-   - Starts hub + probe in a single process
-   - Auto-opens dashboard in browser
-   - Clean shutdown on Ctrl+C
+- [ ] Select agent in sidebar → highlights correctly
+- [ ] Pause button → agent enters PAUSED state, card shows blue overlay
+- [ ] Resume button → agent resumes PROGRESSING
+- [ ] Kill button → agent enters EXITED state
+- [ ] Inject prompt → text reaches the probe's stdin
+- [ ] Multi-agent: start 2+ probes, verify independent selection and control
 
-### Authentication
-2. **Bearer token on hub WS + HTTP** — Simple shared secret
-   - `ARGUS_AUTH_TOKEN` env var
-   - Probes and dashboard send token in WS URL or HTTP header
-   - Reject unauthenticated connections
+### Phase 4: Telemetry + Steering (v0.2.7 features)
 
-### Keyboard Shortcuts (deferred from v0.2.7)
-3. **`src/app/useKeyboardShortcuts.ts`** — Keyboard shortcuts for dashboard
-   - `p` pause, `r` resume, `k` kill, `h` halt run, `s` steer
-   - `1-9` select agent by index
-   - `Esc` deselect
+Since AWOC isn't connected, simulate telemetry by sending raw WS messages:
+- [ ] Telemetry panel appears in sidebar when telemetry_update arrives
+- [ ] Run ID, tool name, context % bar all render correctly
+- [ ] Context % bar color transitions (green → yellow → red) at thresholds
+- [ ] CTX badge appears in agent card header
+- [ ] Halt Run button appears when telemetry active
+- [ ] Steer Agent textarea + button appear when telemetry active
+- [ ] Halt Run sends stoprun command with correct run ID
+- [ ] Steer sends steer command with textarea content
 
-### Post-mortem Timeline (deferred from v0.2.7)
-4. **VLM event timeline view** — Simple chronological display
-   - Fetches from `GET /api/agents/:id/history`
-   - Scrollable list with state, confidence, reasoning, timestamp
-   - Optional: telemetry events interleaved
+### Phase 5: Edge Cases & Hardening
 
-### Documentation
-5. **Getting started guide**, API reference, AWOC integration guide
-6. **README rewrite** with badges, screenshots, quickstart
+- [ ] Disconnect hub → dashboard shows RECONNECTING → restart hub → auto-reconnects
+- [ ] Kill probe → agent_disconnected removes from UI
+- [ ] Rapid state changes → no UI glitches or stale data
+- [ ] Multiple agents → grid layout works, cards don't overlap
+- [ ] Empty state (no agents) → placeholder message shows
+- [ ] Fix any bugs found during testing
 
-### End-to-End
-7. **5 simultaneous AWOC probes** under Argus — validation run
+### Phase 6: Record & Document
+
+- [ ] GIF recording of key interactions for README/docs
+- [ ] Document any bugs found and fixed
+- [ ] Update test count if new tests added for bugs
+
+## How to Simulate Telemetry
+
+Without AWOC, inject telemetry via a script or `websocat`:
+
+```bash
+# Connect as a probe and send telemetry
+# Or modify demo_agent.ts to emit fake telemetry events
+```
+
+Alternatively, use the browser console to send WS messages directly to the hub.
 
 ## Key Files
 
-- `src/app/page.tsx` — Dashboard UI (CRT aesthetic — telemetry panel + steering buttons added in v0.2.7)
-- `src/app/useAgentSocket.ts` — WebSocket hook + pure functions (AgentTelemetry + telemetry_update handler added in v0.2.7)
-- `src/app/page.module.css` — Dark theme styles
-- `src/hub/hub.ts` — WebSocket relay + HTTP API
-- `src/probe/probe.ts` — VLM monitoring pipeline
-- `src/probe/probe-utils.ts` — Command handler (stoprun/steer ready)
-- `src/probe/steering.ts` — AWOC command builder
+- `src/hub/hub.ts` — WebSocket relay (port 8000)
+- `src/probe/probe.ts` — Process wrapper + VLM pipeline
+- `src/demo/demo_agent.ts` — Demo agent that loops into failure
+- `src/app/page.tsx` — Dashboard UI
+- `src/app/useAgentSocket.ts` — WebSocket hook + telemetry handler
+- `src/app/globals.css` + `src/app/page.module.css` — Styles
+
+## Commands
+
+```bash
+bun run dev:hub           # Start hub (must be first)
+bun run dev:dashboard     # Start Next.js dashboard
+bun run dev:probe         # Start demo probe
+
+# Multiple probes with different IDs
+ARGUS_AGENT_ID=A-02 bun run dev:probe
+ARGUS_AGENT_ID=A-03 ARGUS_PTY=1 bun run dev:probe -- htop
+```
 
 ## Version History
 
@@ -85,13 +112,11 @@
 | v0.2.5 | Telemetry Receiver + AWOC Integration | 286 |
 | v0.2.6 | Actuation & Targeted Steering | 310 |
 | v0.2.7 | Steering UX + Dashboard Controls | 329 |
-| **v0.2.8** | **Beta** | **Target: 350+** |
 
 ## Conventions
 
+- **No version bumps this session.** Fix bugs in-place, commit as patches.
+- **Browser automation** — use `mcp__claude-in-chrome__*` tools for visual validation
+- **GIF recording** — capture key interactions with `mcp__claude-in-chrome__gif_creator`
 - **Runtime:** Bun everywhere. No npm.
-- **Testing:** Test-first. Unit tests mirror `src/` structure under `tests/unit/`.
-- **Patterns:** Factory functions, `import.meta.main` guards, pure function extraction.
-- **Dashboard:** CRT terminal aesthetic is sacred. Don't touch design fundamentals.
-- **Versioning:** Patch increments. Each version tested + tagged before next.
-- **Subagents:** Use parallel subagent coders for independent implementation tracks.
+- **Dashboard:** CRT terminal aesthetic is sacred.
