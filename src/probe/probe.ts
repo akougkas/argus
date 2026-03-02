@@ -90,6 +90,9 @@ let lastTelemetry: TelemetryPayload | null = null;
 // Shutdown guard
 let shuttingDown = false;
 
+// Prevents re-spawn after child exit (operator kill or natural exit)
+let childExited = false;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -178,7 +181,7 @@ async function captureFrameFromGrid(ansiContent: string): Promise<string> {
 }
 
 async function startProbe() {
-  if (probeStarted) return;
+  if (probeStarted || childExited) return;
   probeStarted = true;
   clearIntervals(); // Guard against leaked timers from previous runs
 
@@ -233,6 +236,7 @@ async function startProbe() {
     if (terminal) { terminal.dispose(); terminal = null; }
     childProc = null;
     probeStarted = false;
+    childExited = true;
   });
 
   // Screen broadcast loop
