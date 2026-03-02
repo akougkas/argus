@@ -278,6 +278,7 @@ export function applyMessage(agents: Agent[], data: Record<string, unknown>): Ag
 export function useAgentSocket(url: string) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string>("");
+  const [pinnedAgentId, setPinnedAgentId] = useState<string>("");
   const [connected, setConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectDelayRef = useRef(1000);
@@ -362,6 +363,8 @@ export function useAgentSocket(url: string) {
     agents,
     selectedAgentId,
     setSelectedAgentId,
+    pinnedAgentId,
+    setPinnedAgentId,
     selectedAgent: findAgent(agents, selectedAgentId),
     sendCommand,
     connected,

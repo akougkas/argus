@@ -1,47 +1,26 @@
-# Session: Dashboard UX Polish + Pinned Agent Feature
+# Session: Pre-v0.2.8 Visual Polish + Tagging
 
 ## Context
 
-**Dual-feed card redesign complete and validated.** Each agent card now has:
-- Left pane: visual preview (raw terminal/frame) + scrollable log feed, separated by "LOG FEED" divider
-- Right pane: VLM analysis timeline with tier1 (compact `~` entries) / tier2 (full reasoning `>` entries)
-- State banner (flow element, not overlay) — color-coded per state
-- VlmEvent data model: `vlmEvents: VlmEvent[]` on Agent, capped at 50, tier classified by confidence threshold (≤50 = tier1, >50 = tier2)
+**Pinned agent + grid scaling complete and validated.** On top of the dual-feed card redesign:
+- Pin/PinOff toggle in card header (`pinnedAgentId` client-only state in hook)
+- Pinned card: full-width (`grid-column: 1 / -1`), `max-height: 800px`, green glow border
+- One pin at a time, pinned agents render first in grid
+- Dense mode (>6 agents): `minmax(380px)` grid, `align-content: start`
+- Compact cards for non-pinned, non-selected: header + task + last VLM verdict snippet
+- Selected agent always gets full card even in dense mode
 
-**Validated in browser with live VLM pipeline:**
-- All controls tested: Pause (SIGSTOP → blue banner), Resume (SIGCONT), Kill (SIGKILL → gray EXITED)
-- VLM timeline accumulates events correctly across state transitions
-- Multi-agent tested with 8 probes — grid works up to ~8, gets cramped beyond that
+**Validated in browser with 8 probes:**
+- Pinned A-01 full-width flagship, 7 compact cards in 3-column rows
+- Selecting different agents expands them, compact verdict snippets work
+- Pin switching between agents works
 - 339 tests, 0 failures. Lint clean. Build clean.
 
-**No version bump yet.** Still in hardening/polish phase before v0.2.8.
+**No version bump yet.** Ready for final polish + v0.2.8 tagging.
 
 ## What to Do
 
-### Phase 1: Pinned/Flagship Agent Feature
-
-**User request:** ability to pin an agent as "flagship" — gets a larger card for deeper observability. Supports hierarchical team scenarios (orchestrator + developers) where certain agents are more critical.
-
-Design approach:
-- Add `pinned: boolean` to Agent state (toggle via sidebar or card header)
-- Pinned agent card spans full width of grid (grid-column: 1 / -1) with taller max-height
-- Non-pinned agents flow in the normal grid below
-- Only 1 pinned agent at a time (or 2-3 max)
-- Pin icon in card header or sidebar agent list
-
-Key files:
-- `src/app/useAgentSocket.ts` — add `pinned` to Agent interface (client-only state, not from WS)
-- `src/app/page.tsx` — pin toggle UI, card layout logic for pinned vs normal
-- `src/app/page.module.css` — `.agentCardPinned` styles (full width, taller)
-
-### Phase 2: Multi-Agent Grid Scaling
-
-The current grid (`minmax(480px, 1fr)`) works for 1-8 agents. For 8+ agents:
-- Consider reducing card min-width for high agent counts (e.g., 380px when >6 agents)
-- Or: compact card variant for non-selected agents (collapse analysis pane, show only header + state badge + last VLM verdict)
-- Think about pagination or virtual scrolling for 30+ agents
-
-### Phase 3: Continue Visual Debug Cycle
+### Phase 1: Continue Visual Debug Cycle
 
 Run the pipeline, open Chrome, iterate on anything that looks off:
 
@@ -63,26 +42,37 @@ Remaining visual items to check:
 - [ ] Empty state placeholder when no agents connected
 - [ ] GIF recording of key interactions for docs
 
-### Phase 4: Pre-v0.2.8 Checklist
+### Phase 2: Pre-v0.2.8 Checklist
 
 Before bumping to v0.2.8 (beta):
 - [ ] All visual bugs fixed
-- [ ] Pinned agent feature working
-- [ ] Multi-agent grid tested at scale
+- [ ] Pinned agent feature working (DONE)
+- [ ] Multi-agent grid tested at scale (DONE — 8 probes validated)
 - [ ] Tests updated for any new features (target: 350+)
-- [ ] CLAUDE.md updated with new card layout docs
+- [ ] CLAUDE.md updated with pinned agent + grid scaling docs
 - [ ] Consider: authentication on hub endpoints
 - [ ] Consider: macOS `script` syntax compatibility
+- [ ] Tag v0.2.8 + push
 
 ## Architecture Notes
 
+### Pinned Agent (new)
+- `pinnedAgentId` + `setPinnedAgentId` — client-only state in `useAgentSocket` hook return
+- Not on `Agent` interface (it's UI state, not WS protocol)
+- `pinnedAgents` / `unpinnedAgents` arrays computed in page.tsx, pinned render first
+- `isDense` = `agents.length > 6`, triggers `.agentGridDense` class
+- `isCompact` = `isDense && !isPinned && agent.id !== selectedAgentId`
+- Compact cards: JSX conditionally skips `stateBanner` and `dualFeed` rendering
+- `.compactVerdict` shows last VLM event's reasoning (truncated to 80 chars)
+
 ### Current Card Structure (JSX)
 ```
-agentCard
-  ├── agentHeader (name + badges + confidence)
+agentCard [+ agentCardPinned] [+ agentCardCompact]
+  ├── agentHeader (name + pin button + badges + confidence)
   ├── task row
-  ├── stateBanner (conditional, flow element)
-  └── dualFeed
+  ├── compactVerdict (compact only — last VLM reasoning)
+  ├── stateBanner (conditional, not in compact)
+  └── dualFeed (not in compact)
        ├── agentFeed (left)
        │    ├── visualPreview (120px max, raw terminal/frame)
        │    ├── previewDivider ("LOG FEED")
@@ -93,25 +83,13 @@ agentCard
             └── analysisPlaceholder (when empty)
 ```
 
-### VlmEvent Type
-```typescript
-interface VlmEvent {
-  id: string;
-  timestamp: string;
-  state: AgentStateLabel;
-  confidence: number;
-  reasoning: string;
-  tier: "tier1" | "tier2";  // confidence ≤ 50 = tier1, > 50 = tier2
-}
-```
-
 ### CSS Classes Added This Session
-- `.stateBanner[data-state=*]` — colored state banners
-- `.dualFeed`, `.agentFeed`, `.analysisFeed` — dual pane layout
-- `.visualPreview`, `.previewDivider` — visual preview with labeled separator
-- `.analysisFeedHeader` — "VLM ANALYSIS" label
-- `.vlmEvent`, `.vlmCompact`, `.vlmOk/Warning/Danger` — timeline entries
-- `.analysisPlaceholder` — empty state
+- `.agentCardPinned` — full-width pinned card (grid-column: 1 / -1, max-height: 800px)
+- `.agentCard.agentCardCompact` — overrides min-height/max-height for compact mode
+- `.agentGridDense` — denser grid columns (380px min) + align-content: start
+- `.pinButton`, `.pinButton.pinActive` — pin toggle with glow effect
+- `.pinnedBadge` — sidebar pin indicator
+- `.compactVerdict`, `.compactVerdictTime`, `.compactVerdictText` — verdict snippet in compact cards
 
 ### VLM Backend
 - Endpoint: `http://100.74.131.112:8080/v1` (mini's llama-server via Tailscale)
@@ -121,10 +99,10 @@ interface VlmEvent {
 
 ## Key Files
 
-- `src/app/useAgentSocket.ts` — VlmEvent interface, vlmEvents accumulation, tier classification
-- `src/app/page.tsx` — Dual-feed card layout, state banners, VLM timeline
-- `src/app/page.module.css` — All new dual-pane styles
-- `tests/unit/app/apply-message.test.ts` — 10 new vlmEvents tests
+- `src/app/useAgentSocket.ts` — pinnedAgentId state, VlmEvent interface, vlmEvents accumulation
+- `src/app/page.tsx` — Pin toggle, pinnedAgents/unpinnedAgents split, compact card rendering
+- `src/app/page.module.css` — Pinned, compact, dense grid styles
+- `tests/unit/app/apply-message.test.ts` — 339 tests covering apply-message pure functions
 - `src/hub/hub.ts` — WebSocket relay + HTTP API
 - `src/probe/probe.ts` — VLM pipeline
 - `src/demo/demo_agent.ts` — Demo agent for testing
@@ -158,11 +136,12 @@ bun run build             # Production build
 | v0.2.5 | Telemetry Receiver + AWOC Integration | 286 |
 | v0.2.6 | Actuation & Targeted Steering | 310 |
 | v0.2.7 | Steering UX + Dashboard Controls | 329 |
-| v0.2.7+ | Dual-Feed Card Redesign (no version bump) | 339 |
+| v0.2.7+ | Dual-Feed Card Redesign | 339 |
+| v0.2.7+ | Pinned Agent + Grid Scaling | 339 |
 
 ## Conventions
 
-- **No version bumps** until pinned agent + grid scaling done. Then tag v0.2.8.
+- **No version bumps** until visual polish done. Then tag v0.2.8.
 - **Browser automation** — use `mcp__claude-in-chrome__*` tools for visual validation
 - **Runtime:** Bun everywhere. No npm.
 - **Dashboard:** CRT terminal aesthetic is sacred. Design tokens are great — don't change them.

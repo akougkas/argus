@@ -71,12 +71,31 @@
   padding-right: 0.5rem;
 }
 
+.agentGridDense {
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  align-content: start;
+}
+
 .agentCard {
   display: flex;
   flex-direction: column;
   min-height: 350px;
   max-height: 600px;
   transition: all 0.3s ease;
+}
+
+.agentCardPinned {
+  grid-column: 1 / -1;
+  max-height: 800px;
+  min-height: 450px;
+  border-color: rgba(0, 255, 65, 0.4);
+  box-shadow: 0 0 15px rgba(0, 255, 65, 0.08);
+}
+
+.agentCard.agentCardCompact {
+  min-height: 0;
+  max-height: none;
+  overflow: hidden;
 }
 
 .agentHeader {
@@ -552,4 +571,61 @@
 .telemetryBadge {
   font-size: 0.65rem;
   opacity: 0.8;
+}
+
+/* Pin button */
+.pinButton {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  opacity: 0.4;
+  transition: all 0.2s;
+}
+
+.pinButton:hover {
+  opacity: 1;
+  color: var(--text-primary);
+}
+
+.pinButton.pinActive {
+  opacity: 1;
+  color: var(--text-primary);
+  filter: drop-shadow(0 0 4px var(--text-primary));
+}
+
+/* Compact card — last VLM verdict */
+.compactVerdict {
+  padding: 0.3rem 0.75rem;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  border-top: 1px solid rgba(0, 255, 65, 0.08);
+}
+
+.compactVerdictTime {
+  opacity: 0.4;
+  flex-shrink: 0;
+}
+
+.compactVerdictText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pinnedBadge {
+  font-size: 0.55rem;
+  color: var(--text-primary);
+  opacity: 0.7;
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
 }

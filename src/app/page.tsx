@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Activity, ShieldAlert, Pause, Play, XCircle, Send, Terminal, Cpu, Eye, Code, Shield, CircleStop, Square, Brain } from "lucide-react";
+import { Activity, ShieldAlert, Pause, Play, XCircle, Send, Terminal, Cpu, Eye, Code, Shield, CircleStop, Square, Brain, Pin, PinOff } from "lucide-react";
 import styles from "./page.module.css";
 import { useAgentSocket } from "./useAgentSocket";
 
@@ -12,10 +12,16 @@ export default function Dashboard() {
     agents,
     selectedAgentId,
     setSelectedAgentId,
+    pinnedAgentId,
+    setPinnedAgentId,
     selectedAgent,
     sendCommand,
     connected,
   } = useAgentSocket(`${HUB_URL}/ws/dashboard`);
+
+  const pinnedAgents = agents.filter(a => a.id === pinnedAgentId);
+  const unpinnedAgents = agents.filter(a => a.id !== pinnedAgentId);
+  const isDense = agents.length > 6;
 
   const logsEndRef = useRef<HTMLDivElement>(null);
   const analysisEndRef = useRef<HTMLDivElement>(null);
@@ -68,6 +74,9 @@ export default function Dashboard() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <Cpu size={14} />
                   <span>{agent.id}</span>
+                  {agent.id === pinnedAgentId && (
+                    <span className={styles.pinnedBadge}><Pin size={10} /></span>
+                  )}
                 </div>
                 {agent.state !== 'PROGRESSING' && agent.state !== 'PAUSED' && agent.state !== 'EXITED' && (
                    <ShieldAlert size={14} className={agent.state === 'DANGEROUS' ? 'danger-text' : 'warning-text'} />
@@ -172,7 +181,7 @@ export default function Dashboard() {
 
       {/* Main Grid Content */}
       <main className={styles.mainContent}>
-         <div className={styles.agentGrid}>
+         <div className={`${styles.agentGrid} ${isDense ? styles.agentGridDense : ''}`}>
            {agents.length === 0 && (
              <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '3rem', gap: '1rem', gridColumn: '1 / -1' }}>
                <Terminal size={48} opacity={0.3} />
@@ -180,15 +189,25 @@ export default function Dashboard() {
                <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', opacity: 0.6 }}>Start a probe: bun run dev:probe</p>
              </div>
            )}
-           {agents.map(agent => (
+           {[...pinnedAgents, ...unpinnedAgents].map(agent => {
+             const isPinned = agent.id === pinnedAgentId;
+             const isCompact = isDense && !isPinned && agent.id !== selectedAgentId;
+             return (
              <div
                key={agent.id}
-               className={`glass-panel ${styles.agentCard} ${agent.state === 'DANGEROUS' ? styles.cardDanger : ''} ${agent.state === 'STUCK' ? styles.cardWarning : ''} ${agent.state === 'PAUSED' ? styles.cardPaused : ''} ${agent.state === 'EXITED' ? styles.cardExited : ''}`}
+               className={`glass-panel ${styles.agentCard} ${isPinned ? styles.agentCardPinned : ''} ${isCompact ? styles.agentCardCompact : ''} ${agent.state === 'DANGEROUS' ? styles.cardDanger : ''} ${agent.state === 'STUCK' ? styles.cardWarning : ''} ${agent.state === 'PAUSED' ? styles.cardPaused : ''} ${agent.state === 'EXITED' ? styles.cardExited : ''}`}
              >
                <div className={styles.agentHeader}>
                  <div className={styles.agentInfo}>
                    <Code size={16} />
                    <strong>{agent.name}</strong>
+                   <button
+                     className={`${styles.pinButton} ${isPinned ? styles.pinActive : ''}`}
+                     onClick={(e) => { e.stopPropagation(); setPinnedAgentId(isPinned ? '' : agent.id); }}
+                     title={isPinned ? 'Unpin agent' : 'Pin agent'}
+                   >
+                     {isPinned ? <PinOff size={14} /> : <Pin size={14} />}
+                   </button>
                  </div>
                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                    {agent.telemetry && (
@@ -211,7 +230,17 @@ export default function Dashboard() {
                   <span>Task: {agent.task}</span>
                </div>
 
-               {agent.state !== 'PROGRESSING' && (
+               {isCompact && agent.vlmEvents.length > 0 && (() => {
+                 const last = agent.vlmEvents[agent.vlmEvents.length - 1];
+                 return (
+                   <div className={styles.compactVerdict}>
+                     <span className={styles.compactVerdictTime}>{last.timestamp}</span>
+                     <span className={styles.compactVerdictText}>{last.reasoning.slice(0, 80)}{last.reasoning.length > 80 ? '...' : ''}</span>
+                   </div>
+                 );
+               })()}
+
+               {!isCompact && agent.state !== 'PROGRESSING' && (
                  <div className={styles.stateBanner} data-state={agent.state}>
                    {agent.state === 'DANGEROUS' && <><ShieldAlert size={14} /> DANGEROUS BEHAVIOR DETECTED</>}
                    {agent.state === 'HALLUCINATING' && <><ShieldAlert size={14} /> HALLUCINATION DETECTED</>}
@@ -221,7 +250,7 @@ export default function Dashboard() {
                  </div>
                )}
 
-               <div className={styles.dualFeed}>
+               {!isCompact && <div className={styles.dualFeed}>
                  {/* Left pane: visual preview + scrollable logs */}
                  <div className={styles.agentFeed}>
                    <div className={styles.visualPreview}>
@@ -299,9 +328,10 @@ export default function Dashboard() {
                      </div>
                    )}
                  </div>
-               </div>
+               </div>}
              </div>
-           ))}
+             );
+           })}
          </div>
       </main>
     </div>
