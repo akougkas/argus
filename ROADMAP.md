@@ -15,7 +15,7 @@ Increment by patch (0.2.x) until 1.0. Each patch is a shippable, tested unit of 
 | **v0.2.3** | **Persistence + PTY Foundation** | **Phase 1 (validation)** | **Done, tagged** |
 | **v0.2.4** | **Storage Layer + Frame Persistence** | **—** | **Done, tagged** |
 | **v0.2.5** | **Telemetry Receiver + AWOC Integration Foundation** | **Phase 2** | **Done, tagged** |
-| v0.2.6 | Actuation & Targeted Steering | Phase 3 | Planned |
+| **v0.2.6** | **Actuation & Targeted Steering** | **Phase 3** | **Done, tagged** |
 | v0.2.7 | Steering UX + Dashboard Controls | Phase 4 | Planned |
 | v0.2.8 | Beta: Monitors AWOC in Production | Phase 4 | Planned |
 
@@ -158,14 +158,17 @@ New env var: `ARGUS_TELEMETRY_PORT`
 
 ### Result: 286 tests, 0 failures across 18 files
 
-## v0.2.6 — Actuation & Targeted Steering (Planned)
+## v0.2.6 — Actuation & Targeted Steering (Done)
 
 **AWOC Phase 3: Steering commands + integration tests**
 
-- [ ] `src/probe/steering.ts` — AWOC command builder (stoprun, steer → stdin strings)
-- [ ] Extended hub command routing: `stoprun` and `steer` actions
-- [ ] Telemetry integration test (UDP → probe → hub → DB → HTTP)
-- [ ] Steering integration test (dashboard → hub → probe → child stdin)
+- [x] `src/probe/steering.ts` — `buildSteeringCommand()` translates stoprun/steer to AWOC stdin strings
+- [x] Extended `handleCommand()` in probe-utils.ts: `stoprun` and `steer` actions
+- [x] Telemetry integration test — probe WS → hub → SQLite → HTTP API (5 tests)
+- [x] Steering integration test — dashboard → hub → probe routing (5 tests)
+- [x] Steering unit tests (9 tests) + handle-command tests (5 new tests)
+
+### Result: 310 tests, 0 failures across 21 files
 
 ## v0.2.7 — Steering UX + Dashboard Controls (Planned)
 
@@ -194,4 +197,4 @@ New env var: `ARGUS_TELEMETRY_PORT`
 | ~~No frame persistence / visual replay~~ | ~~v0.2.0~~ | ~~v0.2.4~~ Done |
 | ~~Dashboard frame pipeline untested in CI~~ | ~~v0.1.0~~ | ~~v0.2.5~~ Done |
 | ~~useAgentSocket low line coverage (40%)~~ | ~~v0.2.0~~ | ~~v0.2.5~~ Done (61%) |
-| End-to-end telemetry integration test | v0.2.5 | v0.2.6 |
+| ~~End-to-end telemetry integration test~~ | ~~v0.2.5~~ | ~~v0.2.6~~ Done |

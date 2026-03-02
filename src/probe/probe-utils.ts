@@ -1,6 +1,7 @@
 import { ansiToSvg } from "./ansi-to-svg";
 import sharp from "sharp";
 import type { TerminalWrapper } from "./terminal";
+import { buildSteeringCommand } from "./steering";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -140,7 +141,7 @@ export async function compositeGrid(frames: Buffer[]): Promise<string> {
 
 export interface CommandPayload {
   type: "command";
-  action: "pause" | "resume" | "kill" | "inject";
+  action: "pause" | "resume" | "kill" | "inject" | "stoprun" | "steer";
   content?: string;
 }
 
@@ -202,6 +203,19 @@ export function handleCommand(
         console.log(`[probe] Injected: ${msg.content}`);
       }
       break;
+
+    case "stoprun":
+    case "steer": {
+      const stdinCmd = buildSteeringCommand(msg.action, msg.content);
+      if (stdinCmd && childProc.stdin && typeof childProc.stdin !== "number") {
+        (childProc.stdin as { write(data: string): void }).write(stdinCmd);
+        sendLog(`Steering: ${stdinCmd.trim()}`, "system");
+        console.log(`[probe] Steering: ${stdinCmd.trim()}`);
+      } else if (!stdinCmd) {
+        console.warn(`[probe] Invalid steering command: ${msg.action} with no content`);
+      }
+      break;
+    }
   }
 }
 

@@ -121,4 +121,68 @@ describe("handleCommand", () => {
 
     expect(log.calls.length).toBe(0);
   });
+
+  // --- Steering commands (v0.2.6) ---
+
+  test("stoprun with valid content writes /stoprun to stdin", () => {
+    const proc = makeMockProc();
+    const log = makeSendLog();
+    const state = makeSendState();
+
+    handleCommand({ type: "command", action: "stoprun", content: "run-abc-123" }, proc, log.fn, state.fn);
+
+    expect(proc.written).toEqual(["/stoprun run-abc-123\n"]);
+    expect(log.calls.length).toBe(1);
+    expect(log.calls[0].text).toBe("Steering: /stoprun run-abc-123");
+    expect(log.calls[0].type).toBe("system");
+  });
+
+  test("steer with valid content writes /steer to stdin", () => {
+    const proc = makeMockProc();
+    const log = makeSendLog();
+    const state = makeSendState();
+
+    handleCommand({ type: "command", action: "steer", content: "focus on tests" }, proc, log.fn, state.fn);
+
+    expect(proc.written).toEqual(["/steer focus on tests\n"]);
+    expect(log.calls.length).toBe(1);
+    expect(log.calls[0].text).toBe("Steering: /steer focus on tests");
+    expect(log.calls[0].type).toBe("system");
+  });
+
+  test("stoprun with empty content does NOT write to stdin", () => {
+    const proc = makeMockProc();
+    const log = makeSendLog();
+    const state = makeSendState();
+
+    handleCommand({ type: "command", action: "stoprun", content: "" }, proc, log.fn, state.fn);
+
+    expect(proc.written).toEqual([]);
+    expect(log.calls.length).toBe(0);
+  });
+
+  test("steer with no content does NOT write to stdin", () => {
+    const proc = makeMockProc();
+    const log = makeSendLog();
+    const state = makeSendState();
+
+    handleCommand({ type: "command", action: "steer" }, proc, log.fn, state.fn);
+
+    expect(proc.written).toEqual([]);
+    expect(log.calls.length).toBe(0);
+  });
+
+  test("stoprun sends system log with steering command", () => {
+    const proc = makeMockProc();
+    const log = makeSendLog();
+    const state = makeSendState();
+
+    handleCommand({ type: "command", action: "stoprun", content: "run-xyz" }, proc, log.fn, state.fn);
+
+    expect(log.calls.length).toBe(1);
+    expect(log.calls[0].type).toBe("system");
+    expect(log.calls[0].text).toContain("/stoprun run-xyz");
+    // Steering does not change agent state
+    expect(state.calls.length).toBe(0);
+  });
 });

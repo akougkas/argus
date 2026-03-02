@@ -87,7 +87,7 @@ Handles commands from hub: SIGSTOP (pause), SIGCONT (resume), SIGKILL (kill), st
 - `init` — full agent roster sent to dashboard on connect (includes metadata)
 
 **Dashboard → Hub → Probe:**
-- `command` — `{action: "pause"|"resume"|"kill"|"inject", content?: string}`
+- `command` — `{action: "pause"|"resume"|"kill"|"inject"|"stoprun"|"steer", content?: string}`
 
 **HTTP API (v0.2.4):**
 - `GET /api/agents` — all agents (including disconnected)
@@ -124,7 +124,8 @@ All in `.env.example`. Key ones:
 - `src/hub/storage.ts` — StorageLayer abstraction: StorageConfig, FrameStore (filesystem-backed), createStorage factory *(v0.2.4)*
 - `src/hub/db.ts` — SQLite persistence layer using `bun:sqlite` — agents, logs, vlm_events, frames, telemetry_events tables *(v0.2.5)*
 - `src/probe/probe.ts` — VLM monitoring pipeline (connects to hub, spawns child process, pipe or PTY mode)
-- `src/probe/probe-utils.ts` — Pure functions extracted from probe (screen buffers, JSON extraction, command handler, pipeStream, pipeToTerminal)
+- `src/probe/probe-utils.ts` — Pure functions extracted from probe (screen buffers, JSON extraction, command handler incl. stoprun/steer, pipeStream, pipeToTerminal)
+- `src/probe/steering.ts` — AWOC steering command builder (`buildSteeringCommand()`) *(v0.2.6)*
 - `src/probe/terminal.ts` — `@xterm/headless` wrapper with SGR reconstruction for PTY mode *(v0.2.3)*
 - `src/probe/telemetry-listener.ts` — UDP telemetry receiver for AWOC integration (`createTelemetryListener()` factory) *(v0.2.5)*
 - `src/probe/ansi-to-svg.ts` — Inline ANSI→SVG renderer (replaces unmaintained ansi-to-svg package)
@@ -141,6 +142,9 @@ All in `.env.example`. Key ones:
 - `tests/unit/hub/storage.test.ts` — FrameStore unit tests *(v0.2.4)*
 - `tests/unit/hub/hardening.test.ts` — Security hardening tests (path traversal, oversized frame, error resilience) *(v0.2.4)*
 - `tests/unit/probe/telemetry-listener.test.ts` — Telemetry listener unit tests *(v0.2.5)*
+- `tests/unit/probe/steering.test.ts` — Steering command builder tests *(v0.2.6)*
+- `tests/integration/telemetry.test.ts` — Telemetry pipeline integration test *(v0.2.6)*
+- `tests/integration/steering.test.ts` — Steering command routing integration test *(v0.2.6)*
 - `tests/integration/` — Integration tests (pipeline lifecycle, multi-probe orchestration, pty-pipeline, frame persistence)
 - `docs/awoc-integration-plan.md` — Full AWOC integration strategy (4 phases, 2-tier architecture)
 - `docs/awoc-sync.md` — Coordination requests to AWOC team (telemetry extension, steering, run IDs)
