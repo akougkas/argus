@@ -1,14 +1,14 @@
-# Session: v0.2.7 — Steering UX + Dashboard Controls
+# Session: v0.2.8 — Beta
 
 ## Context
 
-**v0.2.6 complete and tagged.** Actuation & targeted steering. Steering module translates dashboard commands (`stoprun`, `steer`) to AWOC stdin strings. Full integration tests prove telemetry and steering pipelines work end-to-end.
+**v0.2.7 complete and tagged.** Steering UX + Dashboard Controls. Telemetry data wired into dashboard — sidebar shows run ID, active tool, context % bar. Steering buttons (Halt Run, Steer Agent) conditionally appear when telemetry is active. Agent cards show CTX % badge.
 
-**310 tests, 0 failures** across 21 test files. Lint clean. Build clean.
+**329 tests, 0 failures** across 21 test files. Lint clean. Build clean.
 
 **Versioning:** Patch-level increments (0.2.x) until 1.0.
 
-**Git tags:** v0.1.0 → v0.2.0 → v0.2.1 → v0.2.2 → v0.2.3 → v0.2.4 → v0.2.5 → v0.2.6
+**Git tags:** v0.1.0 → v0.2.0 → v0.2.1 → v0.2.2 → v0.2.3 → v0.2.4 → v0.2.5 → v0.2.6 → v0.2.7
 
 ## The Big Picture
 
@@ -16,9 +16,10 @@
 1. **Visual baseline** (done, v0.1–v0.2.4) — VLM classifies state from screenshots.
 2. **Semantic hook** (done, v0.2.5) — Telemetry receiver + Tier2 enrichment.
 3. **Actuation** (done, v0.2.6) — Steering commands, integration tests.
-4. **Steering UX** (v0.2.7, this session) — Dashboard UI for per-run control.
+4. **Steering UX** (done, v0.2.7) — Dashboard UI for per-run control.
+5. **Beta** (v0.2.8, this session) — CLI entry point, auth, docs, 5 simultaneous AWOC probes.
 
-**Endgame (v0.2.8):** 5 simultaneous AWOC probes under Argus with per-run targeted steering from the dashboard.
+**Endgame (v0.2.8):** 5 simultaneous AWOC probes under Argus with per-run targeted steering from the dashboard. Ready for first users.
 
 ## AWOC Coordination Status
 
@@ -28,40 +29,46 @@
 | 2 | Graceful stdin injection | **Done** (v0.2.6) — stoprun/steer translation | **Needs validation** |
 | 3 | Run ID visibility | N/A | **May already work** |
 
-## What to Build in v0.2.7
+## What to Build in v0.2.8
 
-### Dashboard Controls (page.tsx modifications — carefully scoped)
+### CLI Entry Point
+1. **`src/cli.ts`** — `bunx argus -- <cmd>` entry point
+   - Starts hub + probe in a single process
+   - Auto-opens dashboard in browser
+   - Clean shutdown on Ctrl+C
 
-**Important:** The CRT terminal aesthetic is sacred. These additions should feel like natural extensions of the existing UI, not redesigns.
+### Authentication
+2. **Bearer token on hub WS + HTTP** — Simple shared secret
+   - `ARGUS_AUTH_TOKEN` env var
+   - Probes and dashboard send token in WS URL or HTTP header
+   - Reject unauthenticated connections
 
-1. **Telemetry sidebar panel** — When telemetry_update arrives:
-   - Show active tool, run ID, context usage % below the existing VLM state display
-   - Wire `applyMessage` to handle `telemetry_update` and store on Agent type
-   - Small, unobtrusive — single line or collapsible section
+### Keyboard Shortcuts (deferred from v0.2.7)
+3. **`src/app/useKeyboardShortcuts.ts`** — Keyboard shortcuts for dashboard
+   - `p` pause, `r` resume, `k` kill, `h` halt run, `s` steer
+   - `1-9` select agent by index
+   - `Esc` deselect
 
-2. **Steering buttons** — Below existing pause/kill/inject controls:
-   - "Halt Run" button → sends `stoprun` command with run ID from telemetry
-   - "Steer" button → opens inject-like text input, sends `steer` command
-   - Only visible when telemetry is active (graceful degradation)
-
-3. **Dashboard WebSocket: `telemetry_update` handling**
-   - Extend `Agent` type with optional telemetry fields
-   - Add `telemetry_update` case to `applyMessage` and `isKnownMessageType`
-   - Tests for the new message type
-
-### Post-mortem / Timeline (if time permits)
-
-4. **VLM event timeline view** — Simple chronological display of VLM events
+### Post-mortem Timeline (deferred from v0.2.7)
+4. **VLM event timeline view** — Simple chronological display
    - Fetches from `GET /api/agents/:id/history`
    - Scrollable list with state, confidence, reasoning, timestamp
    - Optional: telemetry events interleaved
 
+### Documentation
+5. **Getting started guide**, API reference, AWOC integration guide
+6. **README rewrite** with badges, screenshots, quickstart
+
+### End-to-End
+7. **5 simultaneous AWOC probes** under Argus — validation run
+
 ## Key Files
 
-- `src/app/page.tsx` — Dashboard UI (CRT aesthetic — CAREFUL with changes)
-- `src/app/useAgentSocket.ts` — WebSocket hook + pure functions
-- `src/app/globals.css` — Dark theme styles
+- `src/app/page.tsx` — Dashboard UI (CRT aesthetic — telemetry panel + steering buttons added in v0.2.7)
+- `src/app/useAgentSocket.ts` — WebSocket hook + pure functions (AgentTelemetry + telemetry_update handler added in v0.2.7)
+- `src/app/page.module.css` — Dark theme styles
 - `src/hub/hub.ts` — WebSocket relay + HTTP API
+- `src/probe/probe.ts` — VLM monitoring pipeline
 - `src/probe/probe-utils.ts` — Command handler (stoprun/steer ready)
 - `src/probe/steering.ts` — AWOC command builder
 
@@ -77,7 +84,8 @@
 | v0.2.4 | Storage Layer + Frame Persistence | 187 |
 | v0.2.5 | Telemetry Receiver + AWOC Integration | 286 |
 | v0.2.6 | Actuation & Targeted Steering | 310 |
-| **v0.2.7** | **Steering UX + Dashboard Controls** | **Target: 330+** |
+| v0.2.7 | Steering UX + Dashboard Controls | 329 |
+| **v0.2.8** | **Beta** | **Target: 350+** |
 
 ## Conventions
 

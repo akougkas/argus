@@ -70,7 +70,7 @@ Handles commands from hub: SIGSTOP (pause), SIGCONT (resume), SIGKILL (kill), st
 - Visual capture (every 2s): ANSI → SVG (inline renderer) → JPEG (sharp) → base64. Frames stored in buffer and streamed to dashboard.
 - Tier1 cooldown: configurable pause after tier2 escalation (`ARGUS_TIER1_COOLDOWN`, default 5s)
 
-**page.tsx** — Next.js dashboard. CRT terminal aesthetic. Connects to `ws://localhost:8000/ws/dashboard`. Agent grid with live terminal feed, logs, state badges, confidence. Sidebar with pause/kill/inject controls. Auto-reconnects with exponential backoff.
+**page.tsx** — Next.js dashboard. CRT terminal aesthetic. Connects to `ws://localhost:8000/ws/dashboard`. Agent grid with live terminal feed, logs, state badges, confidence. Sidebar with pause/kill/inject controls + telemetry panel (run ID, active tool, context % bar) + steering buttons (halt run, steer agent) *(v0.2.7)*. Auto-reconnects with exponential backoff.
 
 **Agent states:** PROGRESSING, STUCK, DANGEROUS, HALLUCINATING, PAUSED, EXITED
 
@@ -129,7 +129,7 @@ All in `.env.example`. Key ones:
 - `src/probe/terminal.ts` — `@xterm/headless` wrapper with SGR reconstruction for PTY mode *(v0.2.3)*
 - `src/probe/telemetry-listener.ts` — UDP telemetry receiver for AWOC integration (`createTelemetryListener()` factory) *(v0.2.5)*
 - `src/probe/ansi-to-svg.ts` — Inline ANSI→SVG renderer (replaces unmaintained ansi-to-svg package)
-- `src/app/useAgentSocket.ts` — Custom hook for dashboard WebSocket + `applyMessage()` pure function + extracted pure helpers + rAF message batching
+- `src/app/useAgentSocket.ts` — Custom hook for dashboard WebSocket + `applyMessage()` pure function + `AgentTelemetry` type + extracted pure helpers + rAF message batching *(v0.2.7: telemetry_update handler)*
 - `src/demo/demo_agent.ts` — Simulated SWE-agent that loops into failure (for demos)
 - `src/app/page.tsx` — Dashboard UI (CRT terminal aesthetic)
 - `src/app/globals.css` — Dark theme with scanlines, green-on-black

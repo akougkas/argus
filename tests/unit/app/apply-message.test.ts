@@ -721,4 +721,325 @@ describe("isKnownMessageType", () => {
   test("rejects non-string type", () => {
     expect(isKnownMessageType({ type: 42 })).toBe(false);
   });
+
+  test("recognizes telemetry_update", () => {
+    expect(isKnownMessageType({ type: "telemetry_update" })).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildCommand — stoprun and steer actions (v0.2.6)
+// ---------------------------------------------------------------------------
+
+describe("buildCommand — stoprun and steer", () => {
+  test("builds stoprun command with content", () => {
+    expect(buildCommand("stoprun", "A-01", "run-123")).toEqual({
+      type: "command",
+      agent_id: "A-01",
+      action: "stoprun",
+      content: "run-123",
+    });
+  });
+
+  test("builds steer command with content", () => {
+    expect(buildCommand("steer", "A-01", "focus on tests")).toEqual({
+      type: "command",
+      agent_id: "A-01",
+      action: "steer",
+      content: "focus on tests",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// telemetry_update handling (v0.2.6)
+// ---------------------------------------------------------------------------
+
+describe("telemetry_update handling", () => {
+  test("telemetry_update sets telemetry on correct agent", () => {
+    const agents = [makeAgent()];
+    const result = applyMessage(agents, {
+      type: "telemetry_update",
+      agent_id: "A-01",
+      event_type: "tool_execution_start",
+      run_id: "run-123",
+      data: { tool_name: "bash", args: { cmd: "ls" } },
+      telemetry: { context_percent: 42.5, active_runs: 2 },
+    });
+    expect(result[0].telemetry).toBeDefined();
+    expect(result[0].telemetry!.eventType).toBe("tool_execution_start");
+    expect(result[0].telemetry!.runId).toBe("run-123");
+    expect(result[0].telemetry!.contextPercent).toBe(42.5);
+    expect(result[0].telemetry!.activeRuns).toBe(2);
+  });
+
+  test("telemetry_update with tool_execution_start populates toolName", () => {
+    const agents = [makeAgent()];
+    const result = applyMessage(agents, {
+      type: "telemetry_update",
+      agent_id: "A-01",
+      event_type: "tool_execution_start",
+      run_id: "run-1",
+      data: { tool_name: "bash", args: { cmd: "npm test" } },
+      telemetry: { context_percent: 50, active_runs: 1 },
+    });
+    expect(result[0].telemetry!.toolName).toBe("bash");
+  });
+
+  test("telemetry_update without tool_name leaves toolName undefined", () => {
+    const agents = [makeAgent()];
+    const result = applyMessage(agents, {
+      type: "telemetry_update",
+      agent_id: "A-01",
+      event_type: "agent_start",
+      run_id: "run-1",
+      data: {},
+      telemetry: { context_percent: 10, active_runs: 1 },
+    });
+    expect(result[0].telemetry!.toolName).toBeUndefined();
+  });
+
+  test("telemetry_update with args truncates to 80 chars", () => {
+    const longArgs = { cmd: "a".repeat(200) };
+    const agents = [makeAgent()];
+    const result = applyMessage(agents, {
+      type: "telemetry_update",
+      agent_id: "A-01",
+      event_type: "tool_execution_start",
+      run_id: "run-1",
+      data: { tool_name: "bash", args: longArgs },
+      telemetry: { context_percent: 20, active_runs: 1 },
+    });
+    expect(result[0].telemetry!.toolArgs).toBeDefined();
+    expect(result[0].telemetry!.toolArgs!.length).toBe(80);
+  });
+
+  test("telemetry_update with no args leaves toolArgs undefined", () => {
+    const agents = [makeAgent()];
+    const result = applyMessage(agents, {
+      type: "telemetry_update",
+      agent_id: "A-01",
+      event_type: "tool_execution_end",
+      run_id: "run-1",
+      data: { tool_name: "bash" },
+      telemetry: { context_percent: 30, active_runs: 1 },
+    });
+    expect(result[0].telemetry!.toolArgs).toBeUndefined();
+  });
+
+  test("telemetry_update for non-existent agent is no-op", () => {
+    const agents = [makeAgent()];
+    const result = applyMessage(agents, {
+      type: "telemetry_update",
+      agent_id: "GHOST",
+      event_type: "tool_execution_start",
+      run_id: "run-1",
+      data: { tool_name: "bash" },
+      telemetry: { context_percent: 50, active_runs: 1 },
+    });
+    expect(result[0].telemetry).toBeUndefined();
+  });
+
+  test("telemetry_update preserves other agent fields (state, confidence, frame, logs)", () => {
+    const agents = [makeAgent({
+      state: "STUCK",
+      confidence: 42,
+      reasoning: "spinning",
+      frame: "jpeg-data",
+      logs: [{ id: "log-1", timestamp: "12:00:00", text: "hello", type: "info" }],
+    })];
+    const result = applyMessage(agents, {
+      type: "telemetry_update",
+      agent_id: "A-01",
+      event_type: "tool_execution_start",
+      run_id: "run-1",
+      data: { tool_name: "bash" },
+      telemetry: { context_percent: 50, active_runs: 1 },
+    });
+    expect(result[0].state).toBe("STUCK");
+    expect(result[0].confidence).toBe(42);
+    expect(result[0].reasoning).toBe("spinning");
+    expect(result[0].frame).toBe("jpeg-data");
+    expect(result[0].logs.length).toBe(1);
+    expect(result[0].telemetry).toBeDefined();
+  });
+
+  test("telemetry_update only updates targeted agent in multi-agent roster", () => {
+    const agents = [
+      makeAgent({ id: "A-01", name: "A-01" }),
+      makeAgent({ id: "A-02", name: "A-02" }),
+      makeAgent({ id: "A-03", name: "A-03" }),
+    ];
+    const result = applyMessage(agents, {
+      type: "telemetry_update",
+      agent_id: "A-02",
+      event_type: "tool_execution_start",
+      run_id: "run-99",
+      data: { tool_name: "python" },
+      telemetry: { context_percent: 80, active_runs: 3 },
+    });
+    expect(result[0].telemetry).toBeUndefined();
+    expect(result[1].telemetry).toBeDefined();
+    expect(result[1].telemetry!.runId).toBe("run-99");
+    expect(result[2].telemetry).toBeUndefined();
+  });
+
+  test("multiple telemetry_updates keep only latest telemetry", () => {
+    let agents = [makeAgent()];
+    agents = applyMessage(agents, {
+      type: "telemetry_update",
+      agent_id: "A-01",
+      event_type: "tool_execution_start",
+      run_id: "run-1",
+      data: { tool_name: "bash" },
+      telemetry: { context_percent: 10, active_runs: 1 },
+    });
+    agents = applyMessage(agents, {
+      type: "telemetry_update",
+      agent_id: "A-01",
+      event_type: "tool_execution_end",
+      run_id: "run-2",
+      data: { tool_name: "python" },
+      telemetry: { context_percent: 90, active_runs: 5 },
+    });
+    expect(agents[0].telemetry!.eventType).toBe("tool_execution_end");
+    expect(agents[0].telemetry!.runId).toBe("run-2");
+    expect(agents[0].telemetry!.toolName).toBe("python");
+    expect(agents[0].telemetry!.contextPercent).toBe(90);
+    expect(agents[0].telemetry!.activeRuns).toBe(5);
+  });
+
+  test("telemetry_update with context_percent=0 stores 0 (not fallback)", () => {
+    const agents = [makeAgent()];
+    const result = applyMessage(agents, {
+      type: "telemetry_update",
+      agent_id: "A-01",
+      event_type: "agent_start",
+      run_id: "run-1",
+      data: {},
+      telemetry: { context_percent: 0, active_runs: 1 },
+    });
+    expect(result[0].telemetry!.contextPercent).toBe(0);
+  });
+
+  test("telemetry_update with missing telemetry object defaults to 0", () => {
+    const agents = [makeAgent()];
+    const result = applyMessage(agents, {
+      type: "telemetry_update",
+      agent_id: "A-01",
+      event_type: "agent_start",
+      run_id: "run-1",
+      data: {},
+    });
+    expect(result[0].telemetry!.contextPercent).toBe(0);
+    expect(result[0].telemetry!.activeRuns).toBe(0);
+  });
+
+  test("telemetry_update after vlm_update preserves VLM state", () => {
+    let agents = [makeAgent()];
+    agents = applyMessage(agents, {
+      type: "update",
+      agent_id: "A-01",
+      data: { agent_state: "STUCK", confidence_score: 30, reasoning: "loop detected" },
+    });
+    expect(agents[0].state).toBe("STUCK");
+    expect(agents[0].confidence).toBe(30);
+
+    agents = applyMessage(agents, {
+      type: "telemetry_update",
+      agent_id: "A-01",
+      event_type: "tool_execution_start",
+      run_id: "run-1",
+      data: { tool_name: "bash" },
+      telemetry: { context_percent: 50, active_runs: 1 },
+    });
+    expect(agents[0].state).toBe("STUCK");
+    expect(agents[0].confidence).toBe(30);
+    expect(agents[0].reasoning).toBe("loop detected");
+    expect(agents[0].telemetry).toBeDefined();
+    expect(agents[0].telemetry!.toolName).toBe("bash");
+  });
+
+  test("telemetry_update sets non-empty lastUpdated string", () => {
+    const agents = [makeAgent()];
+    const result = applyMessage(agents, {
+      type: "telemetry_update",
+      agent_id: "A-01",
+      event_type: "turn_start",
+      run_id: "run-1",
+      data: {},
+      telemetry: { context_percent: 25, active_runs: 1 },
+    });
+    expect(result[0].telemetry!.lastUpdated).toBeTruthy();
+    expect(typeof result[0].telemetry!.lastUpdated).toBe("string");
+    expect(result[0].telemetry!.lastUpdated.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// applyBatch — telemetry (v0.2.6)
+// ---------------------------------------------------------------------------
+
+describe("applyBatch — telemetry", () => {
+  test("batch with telemetry_update applies correctly", () => {
+    const agents = [makeAgent()];
+    const result = applyBatch(agents, [
+      {
+        type: "telemetry_update",
+        agent_id: "A-01",
+        event_type: "tool_execution_start",
+        run_id: "run-1",
+        data: { tool_name: "bash", args: { cmd: "ls" } },
+        telemetry: { context_percent: 42.5, active_runs: 2 },
+      },
+    ]);
+    expect(result.agents[0].telemetry).toBeDefined();
+    expect(result.agents[0].telemetry!.eventType).toBe("tool_execution_start");
+    expect(result.agents[0].telemetry!.runId).toBe("run-1");
+    expect(result.agents[0].telemetry!.toolName).toBe("bash");
+  });
+
+  test("interleaved telemetry + vlm + frame updates are independent", () => {
+    const agents = [makeAgent()];
+    const result = applyBatch(agents, [
+      {
+        type: "telemetry_update",
+        agent_id: "A-01",
+        event_type: "tool_execution_start",
+        run_id: "run-1",
+        data: { tool_name: "bash" },
+        telemetry: { context_percent: 50, active_runs: 1 },
+      },
+      {
+        type: "update",
+        agent_id: "A-01",
+        data: { agent_state: "STUCK", confidence_score: 30, reasoning: "loop" },
+      },
+      {
+        type: "frame_update",
+        agent_id: "A-01",
+        frame: "jpeg-data",
+      },
+    ]);
+    expect(result.agents[0].telemetry!.toolName).toBe("bash");
+    expect(result.agents[0].state).toBe("STUCK");
+    expect(result.agents[0].confidence).toBe(30);
+    expect(result.agents[0].frame).toBe("jpeg-data");
+  });
+
+  test("telemetry_update in batch does not trigger selectFirst or deselectId", () => {
+    const agents = [makeAgent()];
+    const result = applyBatch(agents, [
+      {
+        type: "telemetry_update",
+        agent_id: "A-01",
+        event_type: "agent_start",
+        run_id: "run-1",
+        data: {},
+        telemetry: { context_percent: 10, active_runs: 1 },
+      },
+    ]);
+    expect(result.selectFirst).toBe(false);
+    expect(result.deselectId).toBeNull();
+  });
 });

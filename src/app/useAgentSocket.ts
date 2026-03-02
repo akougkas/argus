@@ -15,6 +15,16 @@ export interface LogLine {
   type: "system" | "info" | "error" | "warn";
 }
 
+export interface AgentTelemetry {
+  eventType: string;
+  runId: string;
+  toolName?: string;
+  toolArgs?: string;
+  contextPercent: number;
+  activeRuns: number;
+  lastUpdated: string;
+}
+
 export interface Agent {
   id: string;
   name: string;
@@ -25,6 +35,7 @@ export interface Agent {
   reasoning?: string;
   frame?: string;
   ptyScreen?: string;
+  telemetry?: AgentTelemetry;
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +137,7 @@ export function createAgent(id: string, overrides: Partial<Agent> = {}): Agent {
 const KNOWN_TYPES = new Set([
   "init", "agent_disconnected", "frame_update",
   "terminal_screen_update", "log_update", "update",
+  "telemetry_update",
 ]);
 
 export function isKnownMessageType(data: Record<string, unknown>): boolean {
@@ -207,6 +219,26 @@ export function applyMessage(agents: Agent[], data: Record<string, unknown>): Ag
         confidence: (vlm.confidence_score as number) || a.confidence,
         reasoning: vlm.reasoning as string,
         logs: [...a.logs, entry].slice(-20),
+      };
+    });
+  }
+
+  if (data.type === "telemetry_update") {
+    return agents.map((a) => {
+      if (a.id !== data.agent_id) return a;
+      const d = data.data as Record<string, unknown> | undefined;
+      const t = data.telemetry as Record<string, unknown> | undefined;
+      return {
+        ...a,
+        telemetry: {
+          eventType: data.event_type as string,
+          runId: data.run_id as string,
+          toolName: (d?.tool_name as string) || undefined,
+          toolArgs: d?.args ? JSON.stringify(d.args).slice(0, 80) : undefined,
+          contextPercent: (t?.context_percent as number) ?? 0,
+          activeRuns: (t?.active_runs as number) ?? 0,
+          lastUpdated: timestamp(),
+        },
       };
     });
   }

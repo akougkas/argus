@@ -16,7 +16,7 @@ Increment by patch (0.2.x) until 1.0. Each patch is a shippable, tested unit of 
 | **v0.2.4** | **Storage Layer + Frame Persistence** | **—** | **Done, tagged** |
 | **v0.2.5** | **Telemetry Receiver + AWOC Integration Foundation** | **Phase 2** | **Done, tagged** |
 | **v0.2.6** | **Actuation & Targeted Steering** | **Phase 3** | **Done, tagged** |
-| v0.2.7 | Steering UX + Dashboard Controls | Phase 4 | Planned |
+| **v0.2.7** | **Steering UX + Dashboard Controls** | **Phase 4** | **Done, tagged** |
 | v0.2.8 | Beta: Monitors AWOC in Production | Phase 4 | Planned |
 
 ---
@@ -170,19 +170,26 @@ New env var: `ARGUS_TELEMETRY_PORT`
 
 ### Result: 310 tests, 0 failures across 21 files
 
-## v0.2.7 — Steering UX + Dashboard Controls (Planned)
+## v0.2.7 — Steering UX + Dashboard Controls (Done)
 
 **AWOC Phase 4**
 
-- [ ] Dashboard UI: per-run steering controls (halt run, redirect)
-- [ ] Run IDs from telemetry displayed alongside agent state
-- [ ] `src/app/useKeyboardShortcuts.ts` — keyboard shortcuts
-- [ ] Post-mortem replay view with timeline scrubber
+- [x] `AgentTelemetry` interface + `telemetry_update` handler in `applyMessage`
+- [x] Dashboard sidebar: telemetry panel (run ID, active tool, context % bar)
+- [x] Steering buttons: "Halt Run" (sends `stoprun` with run ID) + "Steer Agent" (text input)
+- [x] Agent card CTX % badge with color thresholds (green/yellow/red)
+- [x] Graceful degradation: steering controls only visible when telemetry active
+- [ ] `src/app/useKeyboardShortcuts.ts` — keyboard shortcuts (deferred to v0.2.8)
+- [ ] Post-mortem replay view with timeline scrubber (deferred to v0.2.8)
+
+### Result: 329 tests, 0 failures across 21 files
 
 ## v0.2.8 — Beta (Planned)
 
 - [ ] `src/cli.ts` entry point → `bunx argus -- <cmd>`
 - [ ] Auth basics: bearer token on hub WS + HTTP
+- [ ] `src/app/useKeyboardShortcuts.ts` — keyboard shortcuts
+- [ ] Post-mortem replay view with timeline scrubber
 - [ ] Documentation: getting-started, configuration, API reference, AWOC guide
 - [ ] README rewrite with badges, screenshots
 - [ ] End-to-end: 5 simultaneous AWOC probes under Argus

@@ -355,3 +355,63 @@
   color: #666;
   border-color: #666;
 }
+
+/* Telemetry panel — v0.2.7 */
+.telemetryPanel {
+  padding: 0.5rem;
+  border: 1px solid rgba(0, 255, 65, 0.15);
+  background: rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+}
+
+.telemetryRow {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.telemetryLabel {
+  color: var(--text-muted);
+  min-width: 2.5rem;
+  font-size: 0.7rem;
+}
+
+.telemetryValue {
+  color: var(--text-primary);
+  font-size: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contextBar {
+  flex: 1;
+  height: 12px;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--panel-border);
+  position: relative;
+  overflow: hidden;
+}
+
+.contextFill {
+  height: 100%;
+  transition: width 0.3s ease, background-color 0.3s ease;
+}
+
+.contextText {
+  position: absolute;
+  top: 0;
+  right: 4px;
+  font-size: 0.6rem;
+  line-height: 12px;
+  color: var(--text-primary);
+  text-shadow: 0 0 3px rgba(0, 0, 0, 0.8);
+}
+
+.telemetryBadge {
+  font-size: 0.65rem;
+  opacity: 0.8;
+}

@@ -19,6 +19,7 @@ export default function Dashboard() {
 
   const logsEndRef = useRef<HTMLDivElement>(null);
   const injectRef = useRef<HTMLTextAreaElement>(null);
+  const steerRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -28,6 +29,11 @@ export default function Dashboard() {
     if (action === "inject" && injectRef.current) {
       sendCommand(action, injectRef.current.value);
       injectRef.current.value = "";
+    } else if (action === "stoprun" && selectedAgent?.telemetry) {
+      sendCommand(action, selectedAgent.telemetry.runId);
+    } else if (action === "steer" && steerRef.current) {
+      sendCommand(action, steerRef.current.value);
+      steerRef.current.value = "";
     } else {
       sendCommand(action);
     }
@@ -81,6 +87,39 @@ export default function Dashboard() {
              <div style={{ fontSize: '0.8rem', marginBottom: '0.5rem', display: 'flex', justifyContent: 'space-between'}}>
                 <span>Target: <span className="glow-text">{selectedAgent.id}</span></span>
              </div>
+             {selectedAgent.telemetry && (
+               <div className={styles.telemetryPanel}>
+                 <div className={styles.telemetryRow}>
+                   <span className={styles.telemetryLabel}>RUN</span>
+                   <span className={styles.telemetryValue}>{selectedAgent.telemetry.runId}</span>
+                 </div>
+                 {selectedAgent.telemetry.toolName && (
+                   <div className={styles.telemetryRow}>
+                     <span className={styles.telemetryLabel}>TOOL</span>
+                     <span className={styles.telemetryValue}>{selectedAgent.telemetry.toolName}</span>
+                   </div>
+                 )}
+                 <div className={styles.telemetryRow}>
+                   <span className={styles.telemetryLabel}>CTX</span>
+                   <div className={styles.contextBar}>
+                     <div
+                       className={styles.contextFill}
+                       style={{
+                         width: `${selectedAgent.telemetry.contextPercent}%`,
+                         backgroundColor: selectedAgent.telemetry.contextPercent > 80
+                           ? 'var(--accent-danger)'
+                           : selectedAgent.telemetry.contextPercent > 60
+                           ? 'var(--accent-warning)'
+                           : 'var(--text-primary)',
+                       }}
+                     />
+                     <span className={styles.contextText}>
+                       {selectedAgent.telemetry.contextPercent.toFixed(1)}%
+                     </span>
+                   </div>
+                 </div>
+               </div>
+             )}
              <div className={styles.controls}>
                <button className={styles.btn} onClick={() => handleSendCommand("pause")}>
                  <Pause size={14} /> Pause
@@ -102,6 +141,29 @@ export default function Dashboard() {
                  <Send size={14} /> Inject Prompt
                </button>
              </div>
+             {selectedAgent.telemetry && (
+               <>
+                 <div className={styles.controls}>
+                   <button
+                     className={`${styles.btn} ${styles.danger}`}
+                     onClick={() => handleSendCommand("stoprun")}
+                   >
+                     <CircleStop size={14} /> Halt Run
+                   </button>
+                 </div>
+                 <div className={styles.promptArea}>
+                   <textarea
+                     ref={steerRef}
+                     className={styles.textarea}
+                     placeholder={`Steer ${selectedAgent.id} (run: ${selectedAgent.telemetry.runId})...`}
+                     style={{ height: '60px' }}
+                   ></textarea>
+                   <button className={styles.btn} style={{ width: '100%' }} onClick={() => handleSendCommand("steer")}>
+                     <Send size={14} /> Steer Agent
+                   </button>
+                 </div>
+               </>
+             )}
           </div>
         )}
       </aside>
@@ -152,6 +214,15 @@ export default function Dashboard() {
                    <strong>{agent.name}</strong>
                  </div>
                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                   {agent.telemetry && (
+                     <span className={styles.telemetryBadge} style={{
+                       color: agent.telemetry.contextPercent > 80 ? 'var(--accent-danger)'
+                            : agent.telemetry.contextPercent > 60 ? 'var(--accent-warning)'
+                            : 'var(--text-muted)'
+                     }}>
+                       CTX {agent.telemetry.contextPercent.toFixed(0)}%
+                     </span>
+                   )}
                    <span className="glow-text">{agent.confidence}% CONF</span>
                    <span className={`badge ${agent.state === 'DANGEROUS' ? styles.danger : agent.state === 'STUCK' ? styles.warning : agent.state === 'PAUSED' ? styles.paused : agent.state === 'EXITED' ? styles.exited : ''}`}>
                      {agent.state}
