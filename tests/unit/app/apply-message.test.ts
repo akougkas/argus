@@ -11,6 +11,7 @@ import {
   isKnownMessageType,
   type Agent,
   type BatchResult,
+  type VlmEvent,
 } from "../../../src/app/useAgentSocket";
 
 function makeAgent(overrides: Partial<Agent> = {}): Agent {
@@ -20,6 +21,7 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     task: "",
     state: "PROGRESSING",
     logs: [],
+    vlmEvents: [],
     confidence: 100,
     ...overrides,
   };
@@ -1041,5 +1043,148 @@ describe("applyBatch — telemetry", () => {
     ]);
     expect(result.selectFirst).toBe(false);
     expect(result.deselectId).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// vlmEvents accumulation
+// ---------------------------------------------------------------------------
+
+describe("vlmEvents accumulation", () => {
+  test("update appends VlmEvent with tier2 for non-PROGRESSING state with high confidence", () => {
+    const agents = [makeAgent()];
+    const result = applyMessage(agents, {
+      type: "update",
+      agent_id: "A-01",
+      data: { agent_state: "STUCK", confidence_score: 98, reasoning: "loop detected" },
+    });
+    expect(result[0].vlmEvents.length).toBe(1);
+    const ev = result[0].vlmEvents[0];
+    expect(ev.state).toBe("STUCK");
+    expect(ev.confidence).toBe(98);
+    expect(ev.reasoning).toBe("loop detected");
+    expect(ev.tier).toBe("tier2");
+    expect(ev.id).toBeTruthy();
+    expect(ev.timestamp).toBeTruthy();
+  });
+
+  test("update with low confidence classifies as tier1 (anomaly detection)", () => {
+    const agents = [makeAgent()];
+    const result = applyMessage(agents, {
+      type: "update",
+      agent_id: "A-01",
+      data: { agent_state: "STUCK", confidence_score: 50, reasoning: "Tier 1 anomaly detected" },
+    });
+    expect(result[0].vlmEvents[0].tier).toBe("tier1");
+  });
+
+  test("update appends VlmEvent with tier1 for PROGRESSING state", () => {
+    const agents = [makeAgent()];
+    const result = applyMessage(agents, {
+      type: "update",
+      agent_id: "A-01",
+      data: { agent_state: "PROGRESSING", confidence_score: 95, reasoning: "all good" },
+    });
+    expect(result[0].vlmEvents.length).toBe(1);
+    expect(result[0].vlmEvents[0].tier).toBe("tier1");
+    expect(result[0].vlmEvents[0].state).toBe("PROGRESSING");
+  });
+
+  test("vlmEvents capped at 50", () => {
+    const existing: VlmEvent[] = Array.from({ length: 50 }, (_, i) => ({
+      id: `vlm-${i}`,
+      timestamp: "00:00:00",
+      state: "PROGRESSING" as const,
+      confidence: 100,
+      reasoning: `event-${i}`,
+      tier: "tier1" as const,
+    }));
+    const agents = [makeAgent({ vlmEvents: existing })];
+    const result = applyMessage(agents, {
+      type: "update",
+      agent_id: "A-01",
+      data: { agent_state: "STUCK", confidence_score: 10, reasoning: "overflow" },
+    });
+    expect(result[0].vlmEvents.length).toBe(50);
+    expect(result[0].vlmEvents[49].reasoning).toBe("overflow");
+    expect(result[0].vlmEvents[0].reasoning).toBe("event-1");
+  });
+
+  test("init creates agents with empty vlmEvents", () => {
+    const result = applyMessage([], {
+      type: "init",
+      data: {
+        "A-01": { state: "PROGRESSING", confidence: 100, reasoning: "", logs: [] },
+      },
+    });
+    expect(result[0].vlmEvents).toEqual([]);
+  });
+
+  test("init preserves existing vlmEvents on merge", () => {
+    const ev: VlmEvent = {
+      id: "vlm-1",
+      timestamp: "12:00:00",
+      state: "STUCK",
+      confidence: 30,
+      reasoning: "loop",
+      tier: "tier2",
+    };
+    const existing = makeAgent({ vlmEvents: [ev] });
+    const result = applyMessage([existing], {
+      type: "init",
+      data: {
+        "A-01": { state: "STUCK", confidence: 50, reasoning: "loop", logs: [] },
+      },
+    });
+    expect(result[0].vlmEvents.length).toBe(1);
+    expect(result[0].vlmEvents[0].id).toBe("vlm-1");
+  });
+
+  test("createAgent defaults to empty vlmEvents", () => {
+    const agent = createAgent("A-01");
+    expect(agent.vlmEvents).toEqual([]);
+  });
+
+  test("update with empty reasoning uses state description in VlmEvent", () => {
+    const agents = [makeAgent()];
+    const result = applyMessage(agents, {
+      type: "update",
+      agent_id: "A-01",
+      data: { agent_state: "DANGEROUS", confidence_score: 10, reasoning: "" },
+    });
+    expect(result[0].vlmEvents[0].reasoning).toBe("State updated to DANGEROUS");
+  });
+
+  test("multiple updates accumulate vlmEvents with correct tiers", () => {
+    let agents = [makeAgent()];
+    agents = applyMessage(agents, {
+      type: "update",
+      agent_id: "A-01",
+      data: { agent_state: "PROGRESSING", confidence_score: 95, reasoning: "ok" },
+    });
+    agents = applyMessage(agents, {
+      type: "update",
+      agent_id: "A-01",
+      data: { agent_state: "STUCK", confidence_score: 50, reasoning: "anomaly check" },
+    });
+    agents = applyMessage(agents, {
+      type: "update",
+      agent_id: "A-01",
+      data: { agent_state: "DANGEROUS", confidence_score: 98, reasoning: "rm -rf" },
+    });
+    expect(agents[0].vlmEvents.length).toBe(3);
+    expect(agents[0].vlmEvents[0].tier).toBe("tier1");  // PROGRESSING
+    expect(agents[0].vlmEvents[1].tier).toBe("tier1");  // STUCK but confidence ≤ 50
+    expect(agents[0].vlmEvents[2].tier).toBe("tier2");  // DANGEROUS with confidence > 50
+  });
+
+  test("update for non-existent agent does not create vlmEvents", () => {
+    const agents = [makeAgent()];
+    const result = applyMessage(agents, {
+      type: "update",
+      agent_id: "NOPE",
+      data: { agent_state: "STUCK", confidence_score: 10, reasoning: "loop" },
+    });
+    expect(result[0].vlmEvents.length).toBe(0);
   });
 });

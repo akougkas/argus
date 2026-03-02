@@ -64,7 +64,7 @@
 
 .agentGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(480px, 1fr));
   gap: 1rem;
   flex: 1;
   overflow-y: auto;
@@ -74,7 +74,8 @@
 .agentCard {
   display: flex;
   flex-direction: column;
-  height: 400px;
+  min-height: 350px;
+  max-height: 600px;
   transition: all 0.3s ease;
 }
 
@@ -111,17 +112,6 @@
   border-color: var(--accent-warning);
 }
 
-.visualFeed {
-  flex: 1;
-  position: relative;
-  background: #000;
-  border-bottom: 1px solid var(--panel-border);
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
 .visualPlaceholder {
   color: var(--text-muted);
   font-size: 0.8rem;
@@ -129,18 +119,6 @@
   flex-direction: column;
   align-items: center;
   gap: 0.5rem;
-}
-
-.terminalFeed {
-  height: 120px;
-  padding: 0.5rem;
-  font-size: 0.8rem;
-  overflow-y: auto;
-  background: rgba(0, 10, 0, 0.8);
-  font-family: var(--font-mono);
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
 }
 
 .logLine {
@@ -289,42 +267,202 @@
   animation: flashYellow 2s infinite;
 }
 
-.overlayAlert {
-  position: absolute;
-  top: 1rem;
-  right: 1rem;
-  padding: 0.5rem 1rem;
-  background: rgba(0, 0, 0, 0.8);
-  border: 1px solid var(--accent-danger);
-  color: var(--accent-danger);
+/* State banner — replaces overlay alerts */
+.stateBanner {
+  padding: 0.4rem 1rem;
+  font-size: 0.75rem;
   font-weight: bold;
-  font-size: 0.8rem;
-  z-index: 10;
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  box-shadow: 0 0 10px rgba(255, 0, 60, 0.5);
-  animation: pulse 1s infinite;
+  text-transform: uppercase;
 }
 
-.overlayAlert.warning {
-  border-color: var(--accent-warning);
+.stateBanner[data-state="DANGEROUS"],
+.stateBanner[data-state="HALLUCINATING"] {
+  background: rgba(255, 0, 60, 0.15);
+  color: var(--accent-danger);
+  border-bottom: 1px solid var(--accent-danger);
+}
+
+.stateBanner[data-state="STUCK"] {
+  background: rgba(255, 176, 0, 0.15);
   color: var(--accent-warning);
-  box-shadow: 0 0 10px rgba(255, 176, 0, 0.5);
+  border-bottom: 1px solid var(--accent-warning);
 }
 
-.overlayAlert.pausedAlert {
-  border-color: #4a9eff;
+.stateBanner[data-state="PAUSED"] {
+  background: rgba(74, 158, 255, 0.15);
   color: #4a9eff;
-  box-shadow: 0 0 10px rgba(74, 158, 255, 0.5);
-  animation: none;
+  border-bottom: 1px solid #4a9eff;
 }
 
-.overlayAlert.exitedAlert {
-  border-color: #666;
+.stateBanner[data-state="EXITED"] {
+  background: rgba(100, 100, 100, 0.15);
   color: #888;
-  box-shadow: none;
-  animation: none;
+  border-bottom: 1px solid #666;
+}
+
+/* Dual-feed layout */
+.dualFeed {
+  display: flex;
+  flex: 1;
+  gap: 1px;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.agentFeed {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.visualPreview {
+  max-height: 120px;
+  min-height: 60px;
+  overflow: hidden;
+  background: rgba(0, 8, 0, 0.9);
+  border-bottom: 1px solid rgba(0, 255, 65, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.previewDivider {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.55rem;
+  color: var(--text-muted);
+  opacity: 0.5;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  background: rgba(0, 255, 65, 0.04);
+  border-bottom: 1px solid rgba(0, 255, 65, 0.1);
+  flex-shrink: 0;
+}
+
+.agentLogs {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem;
+  font-size: 0.8rem;
+  background: rgba(0, 10, 0, 0.8);
+  font-family: var(--font-mono);
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.analysisFeed {
+  flex: 1;
+  overflow-y: auto;
+  border-left: 1px solid var(--panel-border);
+  padding: 0.5rem;
+  background: rgba(0, 5, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.analysisFeedHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.6rem;
+  color: var(--text-muted);
+  opacity: 0.6;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid rgba(0, 255, 65, 0.1);
+  flex-shrink: 0;
+}
+
+.vlmEvent {
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--panel-border);
+  border-radius: 2px;
+  font-size: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.vlmEvent.vlmOk {
+  border-left: 3px solid var(--text-primary);
+}
+
+.vlmEvent.vlmWarning {
+  border-left: 3px solid var(--accent-warning);
+}
+
+.vlmEvent.vlmDanger {
+  border-left: 3px solid var(--accent-danger);
+}
+
+.vlmCompact {
+  padding: 0.2rem 0.5rem;
+  opacity: 0.7;
+  border-width: 0;
+  border-left-width: 2px;
+  background: transparent;
+}
+
+.vlmEventHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.7rem;
+}
+
+.vlmEventTier {
+  opacity: 0.5;
+  font-family: var(--font-mono);
+}
+
+.vlmEventTime {
+  opacity: 0.5;
+}
+
+.vlmEventState {
+  padding: 0.05rem 0.3rem;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  font-size: 0.6rem;
+  font-weight: bold;
+}
+
+.vlmEventConf {
+  margin-left: auto;
+  opacity: 0.7;
+}
+
+.vlmEventReasoning {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.analysisPlaceholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  opacity: 0.5;
+  gap: 0.5rem;
 }
 
 .agentListItem.paused {

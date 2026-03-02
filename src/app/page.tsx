@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Activity, ShieldAlert, Pause, Play, XCircle, Send, Terminal, Cpu, Eye, Code, Shield, CircleStop, Square } from "lucide-react";
+import { Activity, ShieldAlert, Pause, Play, XCircle, Send, Terminal, Cpu, Eye, Code, Shield, CircleStop, Square, Brain } from "lucide-react";
 import styles from "./page.module.css";
 import { useAgentSocket } from "./useAgentSocket";
 
@@ -18,11 +18,13 @@ export default function Dashboard() {
   } = useAgentSocket(`${HUB_URL}/ws/dashboard`);
 
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const analysisEndRef = useRef<HTMLDivElement>(null);
   const injectRef = useRef<HTMLTextAreaElement>(null);
   const steerRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    analysisEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [agents, selectedAgentId]);
 
   const handleSendCommand = (action: string) => {
@@ -183,31 +185,6 @@ export default function Dashboard() {
                key={agent.id}
                className={`glass-panel ${styles.agentCard} ${agent.state === 'DANGEROUS' ? styles.cardDanger : ''} ${agent.state === 'STUCK' ? styles.cardWarning : ''} ${agent.state === 'PAUSED' ? styles.cardPaused : ''} ${agent.state === 'EXITED' ? styles.cardExited : ''}`}
              >
-               {agent.state === 'DANGEROUS' && (
-                 <div className={styles.overlayAlert}>
-                   <ShieldAlert size={16} />
-                   DANGEROUS BEHAVIOR DETECTED
-                 </div>
-               )}
-               {agent.state === 'STUCK' && (
-                 <div className={`${styles.overlayAlert} ${styles.warning}`}>
-                   <Activity size={16} />
-                   POSSIBLE LOOP DETECTED
-                 </div>
-               )}
-               {agent.state === 'PAUSED' && (
-                 <div className={`${styles.overlayAlert} ${styles.pausedAlert}`}>
-                   <Pause size={16} />
-                   AGENT PAUSED BY OPERATOR
-                 </div>
-               )}
-               {agent.state === 'EXITED' && (
-                 <div className={`${styles.overlayAlert} ${styles.exitedAlert}`}>
-                   <CircleStop size={16} />
-                   AGENT EXITED
-                 </div>
-               )}
-
                <div className={styles.agentHeader}>
                  <div className={styles.agentInfo}>
                    <Code size={16} />
@@ -234,42 +211,94 @@ export default function Dashboard() {
                   <span>Task: {agent.task}</span>
                </div>
 
-               {/* Visual Feed */}
-               <div className={styles.visualFeed} style={{ position: 'relative', minHeight: '200px', backgroundColor: '#000', color: '#0f0', padding: '10px', overflow: 'hidden' }}>
-                 {agent.ptyScreen ? (
-                   <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: '12px', lineHeight: '1.2' }}>
-                     {agent.ptyScreen}
-                   </pre>
-                 ) : agent.frame ? (
-                   <img
-                     src={`data:image/jpeg;base64,${agent.frame}`}
-                     alt={`Live feed of ${agent.id}`}
-                     style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                   />
-                 ) : (
-                   <div className={styles.visualPlaceholder}>
-                     <Terminal size={32} opacity={0.5} />
-                     <p>[ Waiting for PTY Camera Buffer: {agent.id} ]</p>
-                   </div>
-                 )}
-                 {(agent.state === 'STUCK' || agent.state === 'DANGEROUS' || agent.state === 'HALLUCINATING') && (
-                   <div style={{ position: 'absolute', bottom: '10px', left: '50%', transform: 'translateX(-50%)', backgroundColor: 'rgba(0,0,0,0.8)', padding: '0.5rem', border: '1px dashed currentColor', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem', textAlign: 'center', backdropFilter: 'blur(5px)'}}>
-                     <Activity size={24} className={agent.state === 'DANGEROUS' ? 'danger-text' : 'warning-text'} />
-                     <span>VLM analysis triggered</span>
-                     {agent.reasoning && <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{agent.reasoning}</span>}
-                   </div>
-                 )}
-               </div>
+               {agent.state !== 'PROGRESSING' && (
+                 <div className={styles.stateBanner} data-state={agent.state}>
+                   {agent.state === 'DANGEROUS' && <><ShieldAlert size={14} /> DANGEROUS BEHAVIOR DETECTED</>}
+                   {agent.state === 'HALLUCINATING' && <><ShieldAlert size={14} /> HALLUCINATION DETECTED</>}
+                   {agent.state === 'STUCK' && <><Activity size={14} /> POSSIBLE LOOP DETECTED</>}
+                   {agent.state === 'PAUSED' && <><Pause size={14} /> AGENT PAUSED BY OPERATOR</>}
+                   {agent.state === 'EXITED' && <><CircleStop size={14} /> AGENT EXITED</>}
+                 </div>
+               )}
 
-               {/* Terminal Feed */}
-               <div className={styles.terminalFeed}>
-                 {agent.logs.map(log => (
-                   <div key={log.id} className={`${styles.logLine} ${styles[log.type]}`}>
-                     <span style={{ opacity: 0.5, marginRight: '0.5rem' }}>[{log.timestamp}]</span>
-                     {log.text}
+               <div className={styles.dualFeed}>
+                 {/* Left pane: visual preview + scrollable logs */}
+                 <div className={styles.agentFeed}>
+                   <div className={styles.visualPreview}>
+                     {agent.ptyScreen ? (
+                       <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: '10px', lineHeight: '1.1', color: '#0f0', padding: '4px', width: '100%' }}>
+                         {agent.ptyScreen}
+                       </pre>
+                     ) : agent.frame ? (
+                       <img
+                         src={`data:image/jpeg;base64,${agent.frame}`}
+                         alt={`Live feed of ${agent.id}`}
+                         style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                       />
+                     ) : (
+                       <div className={styles.visualPlaceholder}>
+                         <Terminal size={20} opacity={0.5} />
+                         <p style={{ margin: 0, fontSize: '0.7rem' }}>[ Waiting for feed: {agent.id} ]</p>
+                       </div>
+                     )}
                    </div>
-                 ))}
-                 <div ref={selectedAgentId === agent.id ? logsEndRef : null} />
+                   <div className={styles.previewDivider}>
+                     <Terminal size={10} /> LOG FEED
+                   </div>
+                   <div className={styles.agentLogs}>
+                     {agent.logs.map(log => (
+                       <div key={log.id} className={`${styles.logLine} ${styles[log.type]}`}>
+                         <span style={{ opacity: 0.5, marginRight: '0.5rem' }}>[{log.timestamp}]</span>
+                         {log.text}
+                       </div>
+                     ))}
+                     <div ref={selectedAgentId === agent.id ? logsEndRef : null} />
+                   </div>
+                 </div>
+
+                 {/* Right pane: VLM analysis timeline */}
+                 <div className={styles.analysisFeed}>
+                   <div className={styles.analysisFeedHeader}>
+                     <Brain size={12} opacity={0.5} />
+                     <span>VLM ANALYSIS</span>
+                   </div>
+                   {agent.vlmEvents.length > 0 ? (
+                     <>
+                       {agent.vlmEvents.map(ev => (
+                         <div
+                           key={ev.id}
+                           className={`${styles.vlmEvent} ${
+                             ev.state === 'PROGRESSING' ? styles.vlmOk
+                             : ev.state === 'DANGEROUS' || ev.state === 'HALLUCINATING' ? styles.vlmDanger
+                             : styles.vlmWarning
+                           } ${ev.tier === 'tier1' ? styles.vlmCompact : ''}`}
+                         >
+                           <div className={styles.vlmEventHeader}>
+                             <span className={styles.vlmEventTier}>{ev.tier === 'tier1' ? '~' : '>'}</span>
+                             <span className={styles.vlmEventTime}>{ev.timestamp}</span>
+                             <span className={styles.vlmEventState} style={{
+                               color: ev.state === 'PROGRESSING' ? 'var(--text-primary)'
+                                 : ev.state === 'DANGEROUS' || ev.state === 'HALLUCINATING' ? 'var(--accent-danger)'
+                                 : 'var(--accent-warning)'
+                             }}>
+                               {ev.state}
+                             </span>
+                             <span className={styles.vlmEventConf}>{ev.confidence}%</span>
+                           </div>
+                           {ev.tier === 'tier2' && (
+                             <div className={styles.vlmEventReasoning}>{ev.reasoning}</div>
+                           )}
+                         </div>
+                       ))}
+                       <div ref={selectedAgentId === agent.id ? analysisEndRef : null} />
+                     </>
+                   ) : (
+                     <div className={styles.analysisPlaceholder}>
+                       <Brain size={24} opacity={0.3} />
+                       <span>VLM analysis pending</span>
+                     </div>
+                   )}
+                 </div>
                </div>
              </div>
            ))}

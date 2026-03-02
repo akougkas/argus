@@ -25,12 +25,22 @@ export interface AgentTelemetry {
   lastUpdated: string;
 }
 
+export interface VlmEvent {
+  id: string;
+  timestamp: string;
+  state: AgentStateLabel;
+  confidence: number;
+  reasoning: string;
+  tier: "tier1" | "tier2";
+}
+
 export interface Agent {
   id: string;
   name: string;
   task: string;
   state: AgentStateLabel;
   logs: LogLine[];
+  vlmEvents: VlmEvent[];
   confidence: number;
   reasoning?: string;
   frame?: string;
@@ -130,6 +140,7 @@ export function createAgent(id: string, overrides: Partial<Agent> = {}): Agent {
     state: "PROGRESSING",
     confidence: 100,
     logs: [],
+    vlmEvents: [],
     ...overrides,
   };
 }
@@ -159,6 +170,7 @@ export function applyMessage(agents: Agent[], data: Record<string, unknown>): Ag
         id: nextLogId(),
         timestamp: timestamp(),
       })) as LogLine[],
+      vlmEvents: [],
     }));
     const merged = new Map(agents.map((a) => [a.id, a]));
     for (const a of serverAgents) {
@@ -207,18 +219,31 @@ export function applyMessage(agents: Agent[], data: Record<string, unknown>): Ag
     const vlm = data.data as Record<string, unknown>;
     return agents.map((a) => {
       if (a.id !== data.agent_id) return a;
+      const ts = timestamp();
+      const state = vlm.agent_state as AgentStateLabel;
+      const confidence = (vlm.confidence_score as number) || a.confidence;
+      const reasoning = (vlm.reasoning as string) || "";
       const entry: LogLine = {
         id: nextLogId(),
-        timestamp: timestamp(),
-        text: `[VLM] ${vlm.reasoning || `State updated to ${vlm.agent_state}`}`,
-        type: vlm.agent_state === "PROGRESSING" ? "info" : "warn",
+        timestamp: ts,
+        text: `[VLM] ${reasoning || `State updated to ${state}`}`,
+        type: state === "PROGRESSING" ? "info" : "warn",
+      };
+      const vlmEvent: VlmEvent = {
+        id: nextLogId(),
+        timestamp: ts,
+        state,
+        confidence,
+        reasoning: reasoning || `State updated to ${state}`,
+        tier: state === "PROGRESSING" || confidence <= 50 ? "tier1" : "tier2",
       };
       return {
         ...a,
-        state: vlm.agent_state as AgentStateLabel,
-        confidence: (vlm.confidence_score as number) || a.confidence,
+        state,
+        confidence,
         reasoning: vlm.reasoning as string,
         logs: [...a.logs, entry].slice(-20),
+        vlmEvents: [...a.vlmEvents, vlmEvent].slice(-50),
       };
     });
   }

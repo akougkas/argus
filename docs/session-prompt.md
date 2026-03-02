@@ -1,102 +1,148 @@
-# Session: v0.2.7 Validation — End-to-End Hardening
+# Session: Dashboard UX Polish + Pinned Agent Feature
 
 ## Context
 
-**v0.2.7 tagged.** Seven versions of features built without live validation against an actual running dashboard. Time to stop building and start testing. This session is about running the full pipeline, opening the dashboard in a browser, and verifying everything works visually and functionally.
+**Dual-feed card redesign complete and validated.** Each agent card now has:
+- Left pane: visual preview (raw terminal/frame) + scrollable log feed, separated by "LOG FEED" divider
+- Right pane: VLM analysis timeline with tier1 (compact `~` entries) / tier2 (full reasoning `>` entries)
+- State banner (flow element, not overlay) — color-coded per state
+- VlmEvent data model: `vlmEvents: VlmEvent[]` on Agent, capped at 50, tier classified by confidence threshold (≤50 = tier1, >50 = tier2)
 
-**No version bumps.** This is hardening, debugging, and validation only.
+**Validated in browser with live VLM pipeline:**
+- All controls tested: Pause (SIGSTOP → blue banner), Resume (SIGCONT), Kill (SIGKILL → gray EXITED)
+- VLM timeline accumulates events correctly across state transitions
+- Multi-agent tested with 8 probes — grid works up to ~8, gets cramped beyond that
+- 339 tests, 0 failures. Lint clean. Build clean.
 
-**329 tests, 0 failures** across 21 test files. Lint clean. Build clean. But unit tests don't catch visual bugs, WebSocket timing issues, or UI regressions.
+**No version bump yet.** Still in hardening/polish phase before v0.2.8.
 
 ## What to Do
 
-### Phase 1: Bring Up the Pipeline
+### Phase 1: Pinned/Flagship Agent Feature
 
-1. **Start the hub** — `bun run dev:hub` (port 8000)
-2. **Start the dashboard** — `bun run dev:dashboard` (Next.js dev server)
-3. **Open the dashboard in Chrome** — use browser automation tools
-4. **Start the demo probe** — `bun run dev:probe` (wraps demo_agent.ts)
-5. **Verify**: Agent appears in sidebar, card renders, terminal feed shows output
+**User request:** ability to pin an agent as "flagship" — gets a larger card for deeper observability. Supports hierarchical team scenarios (orchestrator + developers) where certain agents are more critical.
 
-### Phase 2: Visual Validation
+Design approach:
+- Add `pinned: boolean` to Agent state (toggle via sidebar or card header)
+- Pinned agent card spans full width of grid (grid-column: 1 / -1) with taller max-height
+- Non-pinned agents flow in the normal grid below
+- Only 1 pinned agent at a time (or 2-3 max)
+- Pin icon in card header or sidebar agent list
 
-Use browser automation (`mcp__claude-in-chrome__*`) to verify:
+Key files:
+- `src/app/useAgentSocket.ts` — add `pinned` to Agent interface (client-only state, not from WS)
+- `src/app/page.tsx` — pin toggle UI, card layout logic for pinned vs normal
+- `src/app/page.module.css` — `.agentCardPinned` styles (full width, taller)
 
-- [ ] Agent card renders with correct state badge, confidence, task
-- [ ] Terminal feed scrolls with log entries
-- [ ] Frame/PTY screen updates display correctly
-- [ ] VLM state transitions (PROGRESSING → STUCK → DANGEROUS) reflected in UI
-- [ ] State-specific styling: danger red flash, warning yellow, paused blue, exited gray
-- [ ] Overlay alerts appear for DANGEROUS/STUCK/PAUSED/EXITED states
-- [ ] Connection indicator shows LIVE (green dot) when connected
-- [ ] Connection indicator shows RECONNECTING (red dot) when hub is down
+### Phase 2: Multi-Agent Grid Scaling
 
-### Phase 3: Sidebar Controls
+The current grid (`minmax(480px, 1fr)`) works for 1-8 agents. For 8+ agents:
+- Consider reducing card min-width for high agent counts (e.g., 380px when >6 agents)
+- Or: compact card variant for non-selected agents (collapse analysis pane, show only header + state badge + last VLM verdict)
+- Think about pagination or virtual scrolling for 30+ agents
 
-- [ ] Select agent in sidebar → highlights correctly
-- [ ] Pause button → agent enters PAUSED state, card shows blue overlay
-- [ ] Resume button → agent resumes PROGRESSING
-- [ ] Kill button → agent enters EXITED state
-- [ ] Inject prompt → text reaches the probe's stdin
-- [ ] Multi-agent: start 2+ probes, verify independent selection and control
+### Phase 3: Continue Visual Debug Cycle
 
-### Phase 4: Telemetry + Steering (v0.2.7 features)
-
-Since AWOC isn't connected, simulate telemetry by sending raw WS messages:
-- [ ] Telemetry panel appears in sidebar when telemetry_update arrives
-- [ ] Run ID, tool name, context % bar all render correctly
-- [ ] Context % bar color transitions (green → yellow → red) at thresholds
-- [ ] CTX badge appears in agent card header
-- [ ] Halt Run button appears when telemetry active
-- [ ] Steer Agent textarea + button appear when telemetry active
-- [ ] Halt Run sends stoprun command with correct run ID
-- [ ] Steer sends steer command with textarea content
-
-### Phase 5: Edge Cases & Hardening
-
-- [ ] Disconnect hub → dashboard shows RECONNECTING → restart hub → auto-reconnects
-- [ ] Kill probe → agent_disconnected removes from UI
-- [ ] Rapid state changes → no UI glitches or stale data
-- [ ] Multiple agents → grid layout works, cards don't overlap
-- [ ] Empty state (no agents) → placeholder message shows
-- [ ] Fix any bugs found during testing
-
-### Phase 6: Record & Document
-
-- [ ] GIF recording of key interactions for README/docs
-- [ ] Document any bugs found and fixed
-- [ ] Update test count if new tests added for bugs
-
-## How to Simulate Telemetry
-
-Without AWOC, inject telemetry via a script or `websocat`:
+Run the pipeline, open Chrome, iterate on anything that looks off:
 
 ```bash
-# Connect as a probe and send telemetry
-# Or modify demo_agent.ts to emit fake telemetry events
+bun run dev:hub
+bun run dev:dashboard
+# Launch probes individually:
+ARGUS_AGENT_ID=A-01 ARGUS_AGENT_TASK="Deploy frontend" bun run dev:probe
+ARGUS_AGENT_ID=A-02 ARGUS_AGENT_TASK="Run migrations" bun run dev:probe
+# etc.
 ```
 
-Alternatively, use the browser console to send WS messages directly to the hub.
+Remaining visual items to check:
+- [ ] Multi-agent selection: click agent in sidebar, card highlights, controls target correct agent
+- [ ] Grid layout at 4, 8, 12 agents — check for overflow/cramping
+- [ ] Pinned agent card: renders full-width, analysis pane has more room
+- [ ] Inject prompt: type text, send, verify reaches probe stdin
+- [ ] Reconnection: kill hub, dashboard shows RECONNECTING, restart hub, auto-reconnects
+- [ ] Empty state placeholder when no agents connected
+- [ ] GIF recording of key interactions for docs
+
+### Phase 4: Pre-v0.2.8 Checklist
+
+Before bumping to v0.2.8 (beta):
+- [ ] All visual bugs fixed
+- [ ] Pinned agent feature working
+- [ ] Multi-agent grid tested at scale
+- [ ] Tests updated for any new features (target: 350+)
+- [ ] CLAUDE.md updated with new card layout docs
+- [ ] Consider: authentication on hub endpoints
+- [ ] Consider: macOS `script` syntax compatibility
+
+## Architecture Notes
+
+### Current Card Structure (JSX)
+```
+agentCard
+  ├── agentHeader (name + badges + confidence)
+  ├── task row
+  ├── stateBanner (conditional, flow element)
+  └── dualFeed
+       ├── agentFeed (left)
+       │    ├── visualPreview (120px max, raw terminal/frame)
+       │    ├── previewDivider ("LOG FEED")
+       │    └── agentLogs (scrollable)
+       └── analysisFeed (right)
+            ├── analysisFeedHeader ("VLM ANALYSIS")
+            ├── vlmEvent[] (tier1=compact, tier2=full)
+            └── analysisPlaceholder (when empty)
+```
+
+### VlmEvent Type
+```typescript
+interface VlmEvent {
+  id: string;
+  timestamp: string;
+  state: AgentStateLabel;
+  confidence: number;
+  reasoning: string;
+  tier: "tier1" | "tier2";  // confidence ≤ 50 = tier1, > 50 = tier2
+}
+```
+
+### CSS Classes Added This Session
+- `.stateBanner[data-state=*]` — colored state banners
+- `.dualFeed`, `.agentFeed`, `.analysisFeed` — dual pane layout
+- `.visualPreview`, `.previewDivider` — visual preview with labeled separator
+- `.analysisFeedHeader` — "VLM ANALYSIS" label
+- `.vlmEvent`, `.vlmCompact`, `.vlmOk/Warning/Danger` — timeline entries
+- `.analysisPlaceholder` — empty state
+
+### VLM Backend
+- Endpoint: `http://100.74.131.112:8080/v1` (mini's llama-server via Tailscale)
+- Model: `Qwen3.5-35B-A3B-UD-Q4_K_XL` (MoE, 3B active, 120 tok/s)
+- Text-only — tier2 vision falls back to text automatically
+- API key: `llamacpp`
 
 ## Key Files
 
-- `src/hub/hub.ts` — WebSocket relay (port 8000)
-- `src/probe/probe.ts` — Process wrapper + VLM pipeline
-- `src/demo/demo_agent.ts` — Demo agent that loops into failure
-- `src/app/page.tsx` — Dashboard UI
-- `src/app/useAgentSocket.ts` — WebSocket hook + telemetry handler
-- `src/app/globals.css` + `src/app/page.module.css` — Styles
+- `src/app/useAgentSocket.ts` — VlmEvent interface, vlmEvents accumulation, tier classification
+- `src/app/page.tsx` — Dual-feed card layout, state banners, VLM timeline
+- `src/app/page.module.css` — All new dual-pane styles
+- `tests/unit/app/apply-message.test.ts` — 10 new vlmEvents tests
+- `src/hub/hub.ts` — WebSocket relay + HTTP API
+- `src/probe/probe.ts` — VLM pipeline
+- `src/demo/demo_agent.ts` — Demo agent for testing
 
 ## Commands
 
 ```bash
-bun run dev:hub           # Start hub (must be first)
-bun run dev:dashboard     # Start Next.js dashboard
-bun run dev:probe         # Start demo probe
+bun run dev:hub           # Start hub (port 8000, must be first)
+bun run dev:dashboard     # Start Next.js dashboard (port 3000)
+bun run dev:probe         # Start demo probe (A-01 by default)
 
-# Multiple probes with different IDs
-ARGUS_AGENT_ID=A-02 bun run dev:probe
-ARGUS_AGENT_ID=A-03 ARGUS_PTY=1 bun run dev:probe -- htop
+# Multiple probes
+ARGUS_AGENT_ID=A-02 ARGUS_AGENT_TASK="Run migrations" bun run dev:probe
+ARGUS_AGENT_ID=A-03 ARGUS_AGENT_TASK="Security audit" bun run dev:probe
+
+bun test                  # 339 tests
+bun run lint              # ESLint
+bun run build             # Production build
 ```
 
 ## Version History
@@ -112,11 +158,13 @@ ARGUS_AGENT_ID=A-03 ARGUS_PTY=1 bun run dev:probe -- htop
 | v0.2.5 | Telemetry Receiver + AWOC Integration | 286 |
 | v0.2.6 | Actuation & Targeted Steering | 310 |
 | v0.2.7 | Steering UX + Dashboard Controls | 329 |
+| v0.2.7+ | Dual-Feed Card Redesign (no version bump) | 339 |
 
 ## Conventions
 
-- **No version bumps this session.** Fix bugs in-place, commit as patches.
+- **No version bumps** until pinned agent + grid scaling done. Then tag v0.2.8.
 - **Browser automation** — use `mcp__claude-in-chrome__*` tools for visual validation
-- **GIF recording** — capture key interactions with `mcp__claude-in-chrome__gif_creator`
 - **Runtime:** Bun everywhere. No npm.
-- **Dashboard:** CRT terminal aesthetic is sacred.
+- **Dashboard:** CRT terminal aesthetic is sacred. Design tokens are great — don't change them.
+- **Kill background processes** when switching contexts. Don't leave 13 bun processes running.
+- **Multi-agent testing:** launch probes individually as separate background tasks with unique `ARGUS_AGENT_ID`.
