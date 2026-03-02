@@ -190,6 +190,25 @@ export function createHub(port: number, config?: StorageConfig | string): HubIns
       return;
     }
 
+    if (msg.type === "telemetry_update") {
+      const now = Date.now();
+      try {
+        db?.insertTelemetryEvent(
+          agentId,
+          msg.event_type as string,
+          msg.run_id as string,
+          JSON.stringify(msg.data ?? {}),
+          (msg.telemetry as Record<string, unknown>)?.context_percent as number ?? 0,
+          (msg.telemetry as Record<string, unknown>)?.active_runs as number ?? 0,
+          now,
+        );
+      } catch (e) {
+        console.error(`[hub] DB telemetry insert failed for ${agentId}:`, e);
+      }
+      broadcast(raw);
+      return;
+    }
+
     if (msg.type === "log_update") {
       const log = msg.log as { text: string; type: string };
       agentState.logs.push(log);
@@ -260,6 +279,19 @@ export function createHub(port: number, config?: StorageConfig | string): HubIns
         const since = sinceRaw ? parseInt(sinceRaw) : undefined;
         const type = url.searchParams.get("type") || undefined;
         return Response.json(db.getAgentLogs(agentId, { limit, offset, since, type }));
+      }
+
+      const telemetryMatch = url.pathname.match(/^\/api\/agents\/([^/]+)\/telemetry$/);
+      if (db && telemetryMatch && req.method === "GET") {
+        const agentId = decodeURIComponent(telemetryMatch[1]);
+        const limit = parseInt(url.searchParams.get("limit") || "100");
+        const offset = parseInt(url.searchParams.get("offset") || "0");
+        const sinceRaw = url.searchParams.get("since");
+        const since = sinceRaw ? parseInt(sinceRaw) : undefined;
+        const beforeRaw = url.searchParams.get("before");
+        const before = beforeRaw ? parseInt(beforeRaw) : undefined;
+        const run_id = url.searchParams.get("run_id") || undefined;
+        return Response.json(db.getTelemetryEvents(agentId, { limit, offset, since, before, run_id }));
       }
 
       // Frame metadata endpoint

@@ -13,6 +13,7 @@ import {
   type CommandPayload,
 } from "./probe-utils";
 import { createTerminal, type TerminalWrapper } from "./terminal";
+import { createTelemetryListener, type TelemetryListener, type TelemetryPayload } from "./telemetry-listener";
 import { ansiToSvg } from "./ansi-to-svg";
 import sharp from "sharp";
 
@@ -36,6 +37,9 @@ const AGENT_TASK = process.env.ARGUS_AGENT_TASK || "";
 const PTY_MODE = process.env.ARGUS_PTY === "1";
 const PTY_COLS = parseInt(process.env.ARGUS_PTY_COLS || "80");
 const PTY_ROWS = parseInt(process.env.ARGUS_PTY_ROWS || "24");
+const TELEMETRY_PORT = process.env.ARGUS_TELEMETRY_PORT
+  ? parseInt(process.env.ARGUS_TELEMETRY_PORT)
+  : undefined; // undefined = disabled
 
 // CLI: `bun run probe.ts -- python3 my_agent.py`  (default: demo_agent.ts)
 const cliArgs = process.argv.slice(2);
@@ -79,6 +83,10 @@ let lastSentReasoning = "";
 // Operator override — blocks VLM from overriding PAUSED state
 let operatorOverride: string | null = null;
 
+// Telemetry listener (optional, for AWOC integration)
+let telemetryListenerInstance: TelemetryListener | null = null;
+let lastTelemetry: TelemetryPayload | null = null;
+
 // Shutdown guard
 let shuttingDown = false;
 
@@ -117,11 +125,20 @@ function clearIntervals() {
   if (tier1IntervalId) { clearInterval(tier1IntervalId); tier1IntervalId = null; }
 }
 
+function stopTelemetry() {
+  if (telemetryListenerInstance) {
+    telemetryListenerInstance.close();
+    telemetryListenerInstance = null;
+    console.log("[probe] Telemetry listener closed");
+  }
+}
+
 function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log("[probe] Shutting down...");
   clearIntervals();
+  stopTelemetry();
   if (childProc) {
     try { process.kill(childProc.pid, "SIGTERM"); } catch {}
     const forceTimer = setTimeout(() => {
@@ -322,15 +339,60 @@ async function startProbe() {
       isFastPerceptionRunning = false;
     }
   }, FAST_INTERVAL);
+
+  // Telemetry listener — optional UDP receiver for AWOC integration
+  if (TELEMETRY_PORT !== undefined && !telemetryListenerInstance) {
+    createTelemetryListener({
+      port: TELEMETRY_PORT,
+      onEvent(payload: TelemetryPayload) {
+        lastTelemetry = payload;
+        send({
+          type: "telemetry_update",
+          agent_id: AGENT_ID,
+          event_type: payload.event_type,
+          run_id: payload.run_id,
+          data: payload.data,
+          telemetry: payload.telemetry,
+        });
+        console.log(`[telemetry] ${payload.event_type} run=${payload.run_id}`);
+      },
+      onError(err: Error) {
+        console.warn(`[telemetry] ${err.message}`);
+      },
+    }).then((listener) => {
+      telemetryListenerInstance = listener;
+      console.log(`[probe] Telemetry listener on UDP port ${listener.port}`);
+    }).catch((err) => {
+      console.warn(`[probe] Telemetry listener failed to start: ${err.message}`);
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Tier 2: Deep reasoning
 // ---------------------------------------------------------------------------
 
+function buildTelemetryContext(): string {
+  if (!lastTelemetry) return "";
+  const t = lastTelemetry;
+  const parts: string[] = [];
+  if (t.data.tool_name) {
+    const argsStr = t.data.args ? ` with args ${JSON.stringify(t.data.args)}` : "";
+    parts.push(`Currently executing tool '${t.data.tool_name}'${argsStr}.`);
+  }
+  if (t.data.agent_name) {
+    parts.push(`Active agent: ${t.data.agent_name}.`);
+  }
+  parts.push(`Context usage: ${t.telemetry.context_percent.toFixed(1)}%.`);
+  parts.push(`Active runs: ${t.telemetry.active_runs}.`);
+  parts.push(`Run ID: ${t.run_id}.`);
+  return `\n\nSEMANTIC TELEMETRY (from orchestrator):\n${parts.join(" ")}`;
+}
+
 async function runDeepReasoning() {
+  const telemetryCtx = buildTelemetryContext();
   const basePrompt = `You are the L5 Argus Overseer. The fast-perception layer flagged an anomaly on the agent's terminal.
-Determine the exact state: stuck in a loop, failing a build, or hallucinating commands?
+Determine the exact state: stuck in a loop, failing a build, or hallucinating commands?${telemetryCtx}
 
 Reply ONLY with a raw, valid JSON object:
 {
@@ -487,9 +549,16 @@ function connect() {
 
 if (import.meta.main) {
   console.log(`[probe] Argus Probe — agent=${AGENT_ID} cmd="${SPAWN_CMD.join(" ")}"`);
+  if (TELEMETRY_PORT !== undefined) {
+    console.log(`[probe] Telemetry UDP port: ${TELEMETRY_PORT}`);
+  }
   connect();
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
+}
+
+export function getLastTelemetry(): TelemetryPayload | null {
+  return lastTelemetry;
 }
 
 export { connect, startProbe, resetState };

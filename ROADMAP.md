@@ -14,9 +14,9 @@ Increment by patch (0.2.x) until 1.0. Each patch is a shippable, tested unit of 
 | v0.2.2 | Pre-Persistence Hub Hardening | — | Done, tagged |
 | **v0.2.3** | **Persistence + PTY Foundation** | **Phase 1 (validation)** | **Done, tagged** |
 | **v0.2.4** | **Storage Layer + Frame Persistence** | **—** | **Done, tagged** |
-| v0.2.5 | AWOC Semantic Integration | Phase 2–3 | Planned |
-| v0.2.6 | Actuation (auto-pause, webhooks) | — | Planned |
-| v0.2.7 | Granular Steering + Polish | Phase 4 | Planned |
+| **v0.2.5** | **Telemetry Receiver + AWOC Integration Foundation** | **Phase 2** | **Done, tagged** |
+| v0.2.6 | Actuation & Targeted Steering | Phase 3 | Planned |
+| v0.2.7 | Steering UX + Dashboard Controls | Phase 4 | Planned |
 | v0.2.8 | Beta: Monitors AWOC in Production | Phase 4 | Planned |
 
 ---
@@ -143,30 +143,38 @@ New env vars: `ARGUS_FRAME_PATH`, `ARGUS_FRAME_MODE`, `ARGUS_FRAME_TTL`
 
 ### Result: 187 tests, 0 failures across 17 files
 
-## v0.2.5 — AWOC Semantic Integration (Planned)
+## v0.2.5 — Telemetry Receiver + AWOC Integration Foundation (Done)
 
-**AWOC Phase 2–3: Semantic side-channel + synthesized verification**
+**AWOC Phase 2: Semantic side-channel receiver**
 
-- [ ] `src/probe/telemetry-listener.ts` — UDP socket for structured JSON from AWOC extension
-- [ ] Hub merges telemetry with visual state
-- [ ] Tier2 prompt enhanced: visual frames + telemetry JSON
-- [ ] Dashboard sidebar: active tool, run ID, context usage
-- [ ] State transition timeline visualization
+- [x] `src/probe/telemetry-listener.ts` — UDP receiver with schema validation (5 event types)
+- [x] Probe integration: optional telemetry listener via `ARGUS_TELEMETRY_PORT`, forwards to hub
+- [x] Hub: `telemetry_events` table, `telemetry_update` message routing, HTTP API (`GET /api/agents/:id/telemetry`)
+- [x] Tier2 VLM prompt enriched with telemetry context (tool, args, context %, run ID)
+- [x] Dashboard frame pipeline CI tests (7 tests, tech debt from v0.2.4)
+- [x] `useAgentSocket` refactored: 8 pure functions extracted, 40% → 61% line coverage
 
-## v0.2.6 — Actuation (Planned)
+New env var: `ARGUS_TELEMETRY_PORT`
 
-- [ ] Auto-pause: configurable confidence threshold + state match + N-confirmation gate
-- [ ] `src/hub/webhooks.ts` — HTTP POST on state transitions (Slack-compatible)
+### Result: 286 tests, 0 failures across 18 files
 
-## v0.2.7 — Granular Steering + Polish (Planned)
+## v0.2.6 — Actuation & Targeted Steering (Planned)
+
+**AWOC Phase 3: Steering commands + integration tests**
+
+- [ ] `src/probe/steering.ts` — AWOC command builder (stoprun, steer → stdin strings)
+- [ ] Extended hub command routing: `stoprun` and `steer` actions
+- [ ] Telemetry integration test (UDP → probe → hub → DB → HTTP)
+- [ ] Steering integration test (dashboard → hub → probe → child stdin)
+
+## v0.2.7 — Steering UX + Dashboard Controls (Planned)
 
 **AWOC Phase 4**
 
-- [ ] Granular steering: dashboard buttons → stdin injection of `/stoprun`, `/steer`
-- [ ] Run IDs from telemetry or OCR'd from visual feed
+- [ ] Dashboard UI: per-run steering controls (halt run, redirect)
+- [ ] Run IDs from telemetry displayed alongside agent state
 - [ ] `src/app/useKeyboardShortcuts.ts` — keyboard shortcuts
 - [ ] Post-mortem replay view with timeline scrubber
-- [ ] Log search/filter (client-side)
 
 ## v0.2.8 — Beta (Planned)
 
@@ -184,5 +192,6 @@ New env vars: `ARGUS_FRAME_PATH`, `ARGUS_FRAME_MODE`, `ARGUS_FRAME_TTL`
 |------|-----------|--------|
 | No authentication on hub endpoints | v0.1.0 | v0.2.8 |
 | ~~No frame persistence / visual replay~~ | ~~v0.2.0~~ | ~~v0.2.4~~ Done |
-| Dashboard frame pipeline untested in CI | v0.1.0 | v0.2.5 |
-| useAgentSocket low line coverage (40%) | v0.2.0 | v0.2.5 |
+| ~~Dashboard frame pipeline untested in CI~~ | ~~v0.1.0~~ | ~~v0.2.5~~ Done |
+| ~~useAgentSocket low line coverage (40%)~~ | ~~v0.2.0~~ | ~~v0.2.5~~ Done (61%) |
+| End-to-end telemetry integration test | v0.2.5 | v0.2.6 |

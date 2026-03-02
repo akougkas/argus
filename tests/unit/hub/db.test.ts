@@ -252,4 +252,79 @@ describe("createDb", () => {
       expect(frames[0].size_bytes).toBe(98765);
     });
   });
+
+  describe("telemetry methods", () => {
+    test("insertTelemetryEvent stores events correctly", () => {
+      db = createDb();
+      db.insertTelemetryEvent("A-01", "tool_call", "run-1", '{"tool":"bash"}', 42.5, 3, 1000);
+      const events = db.getTelemetryEvents("A-01");
+      expect(events).toHaveLength(1);
+      expect(events[0].agent_id).toBe("A-01");
+      expect(events[0].event_type).toBe("tool_call");
+      expect(events[0].run_id).toBe("run-1");
+      expect(events[0].data).toBe('{"tool":"bash"}');
+      expect(events[0].context_percent).toBe(42.5);
+      expect(events[0].active_runs).toBe(3);
+      expect(events[0].timestamp).toBe(1000);
+    });
+
+    test("getTelemetryEvents returns events in DESC order", () => {
+      db = createDb();
+      db.insertTelemetryEvent("A-01", "tool_call", "run-1", "{}", 10, 1, 1000);
+      db.insertTelemetryEvent("A-01", "token_usage", "run-1", "{}", 20, 1, 2000);
+      db.insertTelemetryEvent("A-01", "error", "run-1", "{}", 30, 1, 3000);
+      const events = db.getTelemetryEvents("A-01");
+      expect(events).toHaveLength(3);
+      expect(events[0].timestamp).toBe(3000);
+      expect(events[1].timestamp).toBe(2000);
+      expect(events[2].timestamp).toBe(1000);
+    });
+
+    test("getTelemetryEvents filters by since", () => {
+      db = createDb();
+      db.insertTelemetryEvent("A-01", "tool_call", "run-1", "{}", 10, 1, 1000);
+      db.insertTelemetryEvent("A-01", "tool_call", "run-1", "{}", 20, 1, 2000);
+      db.insertTelemetryEvent("A-01", "tool_call", "run-1", "{}", 30, 1, 3000);
+      const events = db.getTelemetryEvents("A-01", { since: 2000 });
+      expect(events).toHaveLength(2);
+      expect(events[0].timestamp).toBe(3000);
+      expect(events[1].timestamp).toBe(2000);
+    });
+
+    test("getTelemetryEvents filters by before", () => {
+      db = createDb();
+      db.insertTelemetryEvent("A-01", "tool_call", "run-1", "{}", 10, 1, 1000);
+      db.insertTelemetryEvent("A-01", "tool_call", "run-1", "{}", 20, 1, 2000);
+      db.insertTelemetryEvent("A-01", "tool_call", "run-1", "{}", 30, 1, 3000);
+      const events = db.getTelemetryEvents("A-01", { before: 3000 });
+      expect(events).toHaveLength(2);
+      expect(events[0].timestamp).toBe(2000);
+      expect(events[1].timestamp).toBe(1000);
+    });
+
+    test("getTelemetryEvents filters by run_id", () => {
+      db = createDb();
+      db.insertTelemetryEvent("A-01", "tool_call", "run-1", "{}", 10, 1, 1000);
+      db.insertTelemetryEvent("A-01", "tool_call", "run-2", "{}", 20, 2, 2000);
+      db.insertTelemetryEvent("A-01", "error", "run-1", "{}", 30, 1, 3000);
+      const events = db.getTelemetryEvents("A-01", { run_id: "run-1" });
+      expect(events).toHaveLength(2);
+      expect(events[0].run_id).toBe("run-1");
+      expect(events[1].run_id).toBe("run-1");
+    });
+
+    test("getTelemetryEvents pagination (limit, offset)", () => {
+      db = createDb();
+      for (let i = 0; i < 10; i++) {
+        db.insertTelemetryEvent("A-01", "tool_call", "run-1", "{}", i * 10, 1, 1000 + i);
+      }
+      const page1 = db.getTelemetryEvents("A-01", { limit: 3 });
+      expect(page1).toHaveLength(3);
+      expect(page1[0].timestamp).toBe(1009); // newest first
+
+      const page2 = db.getTelemetryEvents("A-01", { limit: 3, offset: 3 });
+      expect(page2).toHaveLength(3);
+      expect(page2[0].timestamp).toBe(1006);
+    });
+  });
 });

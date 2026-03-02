@@ -48,11 +48,15 @@ Start order: hub → probe → dashboard.
                                                      (Tier 1+2)       │     (v0.2.4)
                                                          │            │
                                                    [StorageLayer]─────┘
-                                                    ├─ SQLite (metadata, logs, events, frame refs)
+                                                    ├─ SQLite (agents, logs, events, frames, telemetry)
                                                     └─ Filesystem (JPEG frames: tmpfs or disk)
+
+                    [AWOC Extension] ──UDP──▶ telemetry-listener.ts ──▶ probe.ts
+                     (pi event bus)           (port from ARGUS_TELEMETRY_PORT)    │
+                                                                           telemetry_update ──▶ hub
 ```
 
-**hub.ts** — Bun WebSocket server (:8000). Two endpoints: `/ws/probe` and `/ws/dashboard`. Probes register with `{type: "register", agent_id, metadata?}` on connect (idempotent — re-register preserves state). Hub maintains agent state and routes dashboard commands to the correct probe. Storage via `StorageLayer` abstraction (v0.2.4) — `createHub(port, config?: StorageConfig | string)` accepts SQLite path (backwards compat) or full `StorageConfig` with `dbPath`, `framePath`, `frameMode`, `frameTTL`. Frame persistence: hub decodes base64 from `frame_update`, writes JPEG to `FrameStore`, records metadata in SQLite, broadcasts to dashboards. Graceful shutdown via SIGINT/SIGTERM. Port configurable via `ARGUS_HUB_PORT`.
+**hub.ts** — Bun WebSocket server (:8000). Two endpoints: `/ws/probe` and `/ws/dashboard`. Probes register with `{type: "register", agent_id, metadata?}` on connect (idempotent — re-register preserves state). Hub maintains agent state and routes dashboard commands to the correct probe. Storage via `StorageLayer` abstraction (v0.2.4) — `createHub(port, config?: StorageConfig | string)` accepts SQLite path (backwards compat) or full `StorageConfig` with `dbPath`, `framePath`, `frameMode`, `frameTTL`. Frame persistence: hub decodes base64 from `frame_update`, writes JPEG to `FrameStore`, records metadata in SQLite, broadcasts to dashboards. Telemetry: `telemetry_update` messages from probes stored in `telemetry_events` table and relayed to dashboards *(v0.2.5)*. Graceful shutdown via SIGINT/SIGTERM. Port configurable via `ARGUS_HUB_PORT`.
 
 **probe.ts** — Process wrapper + two-tier VLM pipeline. Two capture modes:
 - **Pipe mode** (default, `ARGUS_PTY=0`): Bun.spawn with piped stdout/stderr, rolling line buffer for screen state.
@@ -62,7 +66,7 @@ Handles commands from hub: SIGSTOP (pause), SIGCONT (resume), SIGKILL (kill), st
 
 **VLM Pipeline:**
 - Tier 1 (every 1s): Text-based fast binary check — "ANOMALY" or "OK" (5s timeout)
-- Tier 2 (on escalation): Vision-based deep reasoning with 2x2 temporal frame grid → JSON with state classification + confidence (45s timeout). Falls back to text if no frames available.
+- Tier 2 (on escalation): Vision-based deep reasoning with 2x2 temporal frame grid → JSON with state classification + confidence (45s timeout). Falls back to text if no frames available. Injects telemetry context into prompt when available *(v0.2.5)*.
 - Visual capture (every 2s): ANSI → SVG (inline renderer) → JPEG (sharp) → base64. Frames stored in buffer and streamed to dashboard.
 - Tier1 cooldown: configurable pause after tier2 escalation (`ARGUS_TIER1_COOLDOWN`, default 5s)
 
@@ -77,6 +81,7 @@ Handles commands from hub: SIGSTOP (pause), SIGCONT (resume), SIGKILL (kill), st
 - `terminal_screen_update` — raw terminal text
 - `log_update` — individual log line `{text, type}`
 - `vlm_update` — state change from VLM `{agent_state, confidence_score, reasoning}`
+- `telemetry_update` — structured telemetry from AWOC `{event_type, run_id, data, telemetry}` *(v0.2.5)*
 - `frame_update` — base64 JPEG frame from visual pipeline
 - `agent_disconnected` — probe disconnected, remove from UI
 - `init` — full agent roster sent to dashboard on connect (includes metadata)
@@ -90,6 +95,7 @@ Handles commands from hub: SIGSTOP (pause), SIGCONT (resume), SIGKILL (kill), st
 - `GET /api/agents/:id/logs` — paginated logs with `?type=` filter
 - `GET /api/agents/:id/frames` — paginated frame metadata *(v0.2.4)*
 - `GET /api/frames/:path` — serve actual JPEG file *(v0.2.4)*
+- `GET /api/agents/:id/telemetry` — paginated telemetry events with `?run_id=` filter *(v0.2.5)*
 - Query params: `limit=100`, `offset=0`, `since=<timestamp>`, `before=<timestamp>`
 
 ## Environment Variables
@@ -109,18 +115,20 @@ All in `.env.example`. Key ones:
 - `ARGUS_FRAME_PATH` — Frame storage root (default: `/dev/shm/argus-frames` or `/tmp/argus-frames`) *(v0.2.4)*
 - `ARGUS_FRAME_MODE` — `ephemeral` (tmpfs, auto-cleanup) or `persist` (disk, keep all) *(v0.2.4)*
 - `ARGUS_FRAME_TTL` — Auto-cleanup interval in ms, ephemeral mode only (default: `300000`) *(v0.2.4)*
+- `ARGUS_TELEMETRY_PORT` — UDP port for AWOC telemetry receiver; disabled if unset *(v0.2.5)*
 - `ARGUS_AGENT_TASK` — Agent task description sent in register metadata *(v0.2.3)*
 
 ## Key Files
 
 - `src/hub/hub.ts` — WebSocket relay with agent registry, command routing, HTTP API (`createHub()` factory)
 - `src/hub/storage.ts` — StorageLayer abstraction: StorageConfig, FrameStore (filesystem-backed), createStorage factory *(v0.2.4)*
-- `src/hub/db.ts` — SQLite persistence layer using `bun:sqlite` — agents, logs, vlm_events, frames tables *(v0.2.4)*
+- `src/hub/db.ts` — SQLite persistence layer using `bun:sqlite` — agents, logs, vlm_events, frames, telemetry_events tables *(v0.2.5)*
 - `src/probe/probe.ts` — VLM monitoring pipeline (connects to hub, spawns child process, pipe or PTY mode)
 - `src/probe/probe-utils.ts` — Pure functions extracted from probe (screen buffers, JSON extraction, command handler, pipeStream, pipeToTerminal)
 - `src/probe/terminal.ts` — `@xterm/headless` wrapper with SGR reconstruction for PTY mode *(v0.2.3)*
+- `src/probe/telemetry-listener.ts` — UDP telemetry receiver for AWOC integration (`createTelemetryListener()` factory) *(v0.2.5)*
 - `src/probe/ansi-to-svg.ts` — Inline ANSI→SVG renderer (replaces unmaintained ansi-to-svg package)
-- `src/app/useAgentSocket.ts` — Custom hook for dashboard WebSocket + `applyMessage()` pure function + rAF message batching
+- `src/app/useAgentSocket.ts` — Custom hook for dashboard WebSocket + `applyMessage()` pure function + extracted pure helpers + rAF message batching
 - `src/demo/demo_agent.ts` — Simulated SWE-agent that loops into failure (for demos)
 - `src/app/page.tsx` — Dashboard UI (CRT terminal aesthetic)
 - `src/app/globals.css` — Dark theme with scanlines, green-on-black
@@ -132,6 +140,7 @@ All in `.env.example`. Key ones:
 - `tests/unit/app/` — Dashboard unit tests (apply-message)
 - `tests/unit/hub/storage.test.ts` — FrameStore unit tests *(v0.2.4)*
 - `tests/unit/hub/hardening.test.ts` — Security hardening tests (path traversal, oversized frame, error resilience) *(v0.2.4)*
+- `tests/unit/probe/telemetry-listener.test.ts` — Telemetry listener unit tests *(v0.2.5)*
 - `tests/integration/` — Integration tests (pipeline lifecycle, multi-probe orchestration, pty-pipeline, frame persistence)
 - `docs/awoc-integration-plan.md` — Full AWOC integration strategy (4 phases, 2-tier architecture)
 - `docs/awoc-sync.md` — Coordination requests to AWOC team (telemetry extension, steering, run IDs)
@@ -143,7 +152,7 @@ All in `.env.example`. Key ones:
 - **Process capture:** Bun.spawn — pipe mode (stdout/stderr) or PTY mode (`script` + `@xterm/headless`)
 - **Terminal emulation:** `@xterm/headless` v6.0.0 — headless xterm for 2D grid capture in PTY mode *(v0.2.3)*
 - **Visual pipeline:** Inline ANSI→SVG renderer + sharp (SVG → JPEG)
-- **Persistence:** `StorageLayer` — SQLite for metadata (agents, logs, VLM events, frame metadata), filesystem for frame JPEGs (tmpfs ephemeral / disk persistent) *(v0.2.4)*
+- **Persistence:** `StorageLayer` — SQLite for metadata (agents, logs, VLM events, frame metadata, telemetry events), filesystem for frame JPEGs (tmpfs ephemeral / disk persistent) *(v0.2.5)*
 - **VLM:** OpenAI SDK against any compatible endpoint (text tier1 + vision tier2)
 - **Font:** JetBrains Mono | **Icons:** lucide-react
 

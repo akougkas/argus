@@ -78,6 +78,28 @@ export interface DbInstance {
     size_bytes: number;
   }>;
   deleteFramesBefore(agentId: string, olderThan: number): number;
+  insertTelemetryEvent(
+    agentId: string,
+    eventType: string,
+    runId: string,
+    data: string,
+    contextPercent: number,
+    activeRuns: number,
+    timestamp: number,
+  ): void;
+  getTelemetryEvents(
+    agentId: string,
+    opts?: { limit?: number; offset?: number; since?: number; before?: number; run_id?: string },
+  ): Array<{
+    id: number;
+    agent_id: string;
+    event_type: string;
+    run_id: string;
+    data: string;
+    context_percent: number;
+    active_runs: number;
+    timestamp: number;
+  }>;
   close(): void;
 }
 
@@ -125,6 +147,17 @@ export function createDb(path?: string): DbInstance {
       size_bytes INTEGER
     );
     CREATE INDEX IF NOT EXISTS idx_frames_agent_ts ON frames(agent_id, timestamp);
+    CREATE TABLE IF NOT EXISTS telemetry_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent_id TEXT,
+      event_type TEXT,
+      run_id TEXT,
+      data TEXT,
+      context_percent REAL,
+      active_runs INTEGER,
+      timestamp INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_telemetry_agent_ts ON telemetry_events(agent_id, timestamp);
   `);
 
   // Prepared statements
@@ -159,6 +192,11 @@ export function createDb(path?: string): DbInstance {
 
   const stmtDeleteFramesBefore = db.prepare(`
     DELETE FROM frames WHERE agent_id = ? AND timestamp < ?
+  `);
+
+  const stmtInsertTelemetryEvent = db.prepare(`
+    INSERT INTO telemetry_events (agent_id, event_type, run_id, data, context_percent, active_runs, timestamp)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
 
   const stmtGetAllAgents = db.prepare(`SELECT * FROM agents`);
@@ -253,6 +291,37 @@ export function createDb(path?: string): DbInstance {
     deleteFramesBefore(agentId, olderThan) {
       const result = stmtDeleteFramesBefore.run(agentId, olderThan);
       return result.changes;
+    },
+
+    insertTelemetryEvent(agentId, eventType, runId, data, contextPercent, activeRuns, timestamp) {
+      stmtInsertTelemetryEvent.run(agentId, eventType, runId, data, contextPercent, activeRuns, timestamp);
+    },
+
+    getTelemetryEvents(agentId, opts = {}) {
+      const { limit = 100, offset = 0, since, before, run_id } = opts;
+      const conditions = ["agent_id = ?"];
+      const params: (string | number)[] = [agentId];
+
+      if (since !== undefined) {
+        conditions.push("timestamp >= ?");
+        params.push(since);
+      }
+      if (before !== undefined) {
+        conditions.push("timestamp < ?");
+        params.push(before);
+      }
+      if (run_id !== undefined) {
+        conditions.push("run_id = ?");
+        params.push(run_id);
+      }
+
+      params.push(limit, offset);
+      const where = conditions.join(" AND ");
+      return db
+        .prepare(
+          `SELECT * FROM telemetry_events WHERE ${where} ORDER BY timestamp DESC LIMIT ? OFFSET ?`,
+        )
+        .all(...params) as ReturnType<DbInstance["getTelemetryEvents"]>;
     },
 
     close() {

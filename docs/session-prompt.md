@@ -1,76 +1,82 @@
-# Session: v0.2.5 — Telemetry Receiver + AWOC Integration Foundation
+# Session: v0.2.6 — Actuation & Targeted Steering
 
 ## Context
 
-**v0.2.4 complete and tagged.** StorageLayer + frame persistence + security hardening. All infrastructure for storing and querying visual state is in place.
+**v0.2.5 complete and tagged.** Telemetry receiver + AWOC integration foundation. UDP listener receives structured JSON from AWOC, stores in SQLite, enriches Tier2 VLM prompt with semantic context. Extracted 8 pure functions from dashboard hook for testability.
 
-**187 tests, 0 failures** across 17 test files. Lint clean. Build clean.
+**286 tests, 0 failures** across 18 test files. Lint clean. Build clean.
 
 **Versioning:** Patch-level increments (0.2.x) until 1.0.
 
-**Git tags:** v0.1.0 → v0.2.0 → v0.2.1 → v0.2.2 → v0.2.3 → v0.2.4
+**Git tags:** v0.1.0 → v0.2.0 → v0.2.1 → v0.2.2 → v0.2.3 → v0.2.4 → v0.2.5
 
 ## The Big Picture
 
-Argus is a **real-time visual verification and steering layer for autonomous AI agents** — "Datadog for Autonomous Agents." Currently it works as a standalone terminal monitor for *any* CLI process. The next leap is deep integration with AWOC (our multi-agent orchestrator) to go from "guessing from pixels" to "verifying against ground truth."
-
-**Two-tier strategy:**
-1. **Visual baseline** (done, v0.1–v0.2.4) — Probe wraps any CLI, VLM pipeline classifies agent state from terminal screenshots.
-2. **Semantic hook** (v0.2.5+) — For AWOC specifically, a telemetry extension streams structured JSON (tool calls, run IDs, context %) over local UDP. Hub merges visual + semantic. VLM prompts include both pixels AND structured data.
+**Two-tier strategy progression:**
+1. **Visual baseline** (done, v0.1–v0.2.4) — Probe wraps any CLI, VLM classifies state from screenshots.
+2. **Semantic hook** (done, v0.2.5) — Telemetry receiver + Tier2 enrichment. Tested with mock UDP; end-to-end requires AWOC's extension.
+3. **Actuation** (v0.2.6, this session) — Targeted steering: AWOC-specific commands (stoprun, steer) via stdin injection. Integration tests for telemetry + steering pipelines.
+4. **Steering UX** (v0.2.7) — Dashboard UI for per-run control.
 
 **Endgame (v0.2.8):** 5 simultaneous AWOC probes under Argus with per-run targeted steering from the dashboard.
 
+**Key constraint:** The telemetry receiver (v0.2.5) is tested with mock UDP only. End-to-end validation requires AWOC's `src/extensions/argus-telemetry.ts`, which doesn't exist yet. v0.2.6 should prove the full wiring via integration tests before building more features on top.
+
 ## AWOC Coordination Status
 
-Requests to AWOC team are documented in `docs/awoc-sync.md` (3 requests):
+Requests documented in `docs/awoc-sync.md`:
 
 | # | Request | Argus Side | AWOC Side |
 |---|---------|-----------|-----------|
-| 1 | Telemetry extension — hook `pi` event bus, stream JSON to `ARGUS_TELEMETRY_SOCKET` | **Not started** — need `telemetry-listener.ts` | **Not started** — need `src/extensions/argus-telemetry.ts` in AWOC |
-| 2 | Graceful stdin injection — `/stoprun`, `/steer` via PTY | **Plumbing exists** (probe stdin inject works) | **Needs validation** |
+| 1 | Telemetry extension | **Done** (v0.2.5) — receiver, storage, VLM enrichment | **Not started** — need `src/extensions/argus-telemetry.ts` in AWOC |
+| 2 | Graceful stdin injection — `/stoprun`, `/steer` | **Plumbing exists** (probe stdin inject works); **v0.2.6** adds AWOC translation layer | **Needs validation** |
 | 3 | Run ID visibility in `awoc-dispatch` widget | N/A (VLM reads it) | **May already work** |
 
-**Key constraint:** v0.2.5 can build the Argus receiver and test it with mock telemetry. End-to-end testing requires AWOC's extension. Design the interface now, ship independently.
+## What to Build in v0.2.6
 
-Full integration plan: `docs/awoc-integration-plan.md`
+### Track A: Steering Module (independent, no AWOC dependency)
 
-## What to Build in v0.2.5
+1. **`src/probe/steering.ts`** — New module
+   - `buildSteeringCommand(action, runId?, content?)` → stdin string
+   - Actions: `stoprun <id>` → `/stoprun <id>\n`, `steer <message>` → `/steer <message>\n`
+   - Pure functions, no state — translates dashboard actions to AWOC stdin strings
+   - Validates run IDs are non-empty strings
+   - Unit tests in `tests/unit/probe/steering.test.ts`
 
-### Track A: Telemetry Receiver (Argus-side, no AWOC dependency)
+2. **Extended hub command routing** — Add `"stoprun"` and `"steer"` actions
+   - Hub already routes `command` messages from dashboard to probe
+   - Add new action types alongside existing `pause/resume/kill/inject`
+   - Hub passes through to probe; probe calls steering module to build stdin string
+   - Update `handleCommand()` in `probe-utils.ts` to handle `stoprun` and `steer`
+   - Tests for new actions in existing hub and probe test files
 
-Build the UDP listener that will receive structured JSON from AWOC's telemetry extension. Test with mock data.
+### Track B: Integration Tests (independent, proves v0.2.5 wiring)
 
-1. **`src/probe/telemetry-listener.ts`** — New module
-   - `createTelemetryListener(port: number)` → EventEmitter or callback-based
-   - Listens on UDP socket (port from `ARGUS_TELEMETRY_PORT` env var, default 9100)
-   - Parses incoming JSON, validates schema: `{ timestamp, event_type, run_id, data, telemetry }`
-   - Emits typed events: `tool_start`, `tool_end`, `agent_start`, `turn_start`, `context_compact`
-   - Graceful: if port in use or bind fails, log warning and continue without telemetry
-   - Unit tests with mock UDP packets
+3. **Telemetry integration test** — `tests/integration/telemetry.test.ts`
+   - Spin up hub + connect probe WS + mock UDP sender
+   - Send mock telemetry UDP packet → verify:
+     - `telemetry_update` arrives at dashboard WS
+     - Event stored in SQLite `telemetry_events` table
+     - `GET /api/agents/:id/telemetry` returns the event
+   - Test multiple event types, filtering by run_id
 
-2. **Probe integration** — Wire telemetry into probe.ts
-   - Probe optionally starts telemetry listener alongside visual pipeline
-   - Forward telemetry events to hub as new message type: `telemetry_update`
-   - `{ type: "telemetry_update", agent_id, event_type, run_id, data, telemetry }`
+4. **Steering integration test** — `tests/integration/steering.test.ts`
+   - Spin up hub + probe WS (probe wraps `cat` or simple echo process)
+   - Send `stoprun` command from dashboard WS → verify:
+     - Command routed through hub to probe
+     - Correct `/stoprun <id>\n` string written to child stdin
+   - Same for `steer` command
+   - Verify existing `pause/resume/kill/inject` still work (regression)
 
-3. **Hub merge** — Store and correlate
-   - New `telemetry_events` table in db.ts (or extend `vlm_events`)
-   - Hub stores telemetry alongside visual state
-   - HTTP API: `GET /api/agents/:id/telemetry` — paginated telemetry timeline
+### Sequencing
 
-4. **Enhanced Tier2 prompt** — When telemetry available, inject into VLM system prompt:
-   - "The agent is currently executing tool 'dispatch_agent' with args {...}. Context usage: 45%. Active runs: 2."
-   - Falls back to visual-only if no telemetry (graceful degradation)
+Tracks A and B are fully independent — launch in parallel:
+- Track A: steering.ts + hub routing + probe-utils update + unit tests
+- Track B: telemetry integration test + steering integration test
 
-### Track B: Tech Debt Cleanup
+Then verify all tests pass together.
 
-5. **Dashboard frame pipeline CI test** — Deferred from v0.2.4
-6. **`useAgentSocket` coverage** — 40% → 60%+ lines
-
-### New Env Vars (planned)
-- `ARGUS_TELEMETRY_PORT` — UDP port for telemetry listener (default: 9100)
-
-### Telemetry Schema (from `docs/awoc-sync.md`)
+### Telemetry Schema (reference, from v0.2.5)
 
 ```typescript
 interface TelemetryPayload {
@@ -90,40 +96,39 @@ interface TelemetryPayload {
 }
 ```
 
-## Architecture (v0.2.5 target)
+### Steering Command Protocol (new in v0.2.6)
 
-```
-                    ┌─── Pipe mode (default) ───┐
-[any command] ──────┤                           ├──▶ probe.ts ──WS──▶ hub.ts ──WS──▶ page.tsx
-                    └─── PTY mode (ARGUS_PTY=1) ┘       │            ▲  │               │
-                         script -qefc + xterm/headless   │            │  │         pause/kill/inject
-                                                      VLM tiers       │  └─ HTTP API ──▶ /api/*
-                                                     (Tier 1+2)       │
-                                                         │            │
-                                                   [StorageLayer]─────┘
-                                                    ├─ SQLite (agents, logs, events, frames, telemetry)
-                                                    └─ Filesystem (JPEG frames: tmpfs or disk)
+```typescript
+// Dashboard → Hub → Probe (extends existing command protocol)
+{
+  type: "command",
+  agent_id: "A-01",
+  action: "stoprun" | "steer",  // new actions
+  content: "run-id-123"         // for stoprun: run ID; for steer: message
+}
 
-                    [AWOC Extension] ──UDP──▶ telemetry-listener.ts ──▶ probe.ts
-                     (pi event bus)           (port 9100)                  │
-                                                                    telemetry_update ──▶ hub
+// Probe translates to AWOC stdin:
+// stoprun → "/stoprun run-id-123\n"
+// steer   → "/steer Stop working on the backend\n"
 ```
 
-## Key Files (current state, for reference)
+## Key Files (current state)
 
-- `src/hub/hub.ts` — WebSocket relay + HTTP API + frame handling (92% func, 90% line coverage)
+- `src/hub/hub.ts` — WebSocket relay + HTTP API + telemetry handling (92% func, 90% line)
 - `src/hub/storage.ts` — StorageLayer: StorageConfig, FrameStore, createStorage factory
-- `src/hub/db.ts` — SQLite: agents, logs, vlm_events, frames tables (100% func coverage)
-- `src/probe/probe.ts` — VLM pipeline, pipe/PTY modes, process wrapper
-- `src/probe/probe-utils.ts` — Pure functions (screen buffer, JSON extraction, command handler)
+- `src/hub/db.ts` — SQLite: agents, logs, vlm_events, frames, telemetry_events (100% func, 96% line)
+- `src/probe/probe.ts` — VLM pipeline + telemetry listener + pipe/PTY modes
+- `src/probe/probe-utils.ts` — Pure functions: screen buffer, JSON extraction, command handler, pipeStream
+- `src/probe/telemetry-listener.ts` — UDP telemetry receiver (createTelemetryListener factory, 75% func, 94% line)
 - `src/probe/terminal.ts` — @xterm/headless wrapper for PTY grid capture
 - `src/probe/ansi-to-svg.ts` — Inline ANSI→SVG renderer
 - `src/app/page.tsx` — Dashboard (CRT aesthetic — do NOT modify design)
-- `src/app/useAgentSocket.ts` — Dashboard WebSocket hook
-- `docs/awoc-sync.md` — Coordination requests to AWOC team (3 requests)
+- `src/app/useAgentSocket.ts` — Dashboard WebSocket hook + 8 extracted pure helpers (96% func, 61% line)
+- `tests/helpers.ts` — Shared test utilities (wsUrl, waitForMessage, waitForOpen)
+- `docs/awoc-sync.md` — Coordination requests to AWOC team
 - `docs/awoc-integration-plan.md` — Full integration strategy (4 phases)
 
-## Version History (context for new session)
+## Version History
 
 | Version | What | Tests |
 |---------|------|-------|
@@ -133,7 +138,8 @@ interface TelemetryPayload {
 | v0.2.2 | Pre-Persistence Hub Hardening — metadata, agent lifecycle | 126 |
 | v0.2.3 | Persistence + PTY — SQLite, script+xterm/headless, HTTP API | 146 |
 | v0.2.4 | Storage Layer + Frame Persistence + Security Hardening | 187 |
-| **v0.2.5** | **Telemetry Receiver + AWOC Integration Foundation** | **Target: 200+** |
+| v0.2.5 | Telemetry Receiver + AWOC Integration Foundation | 286 |
+| **v0.2.6** | **Actuation & Targeted Steering** | **Target: 310+** |
 
 ## Conventions
 

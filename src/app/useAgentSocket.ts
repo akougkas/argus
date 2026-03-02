@@ -41,6 +41,97 @@ function timestamp(): string {
   return new Date().toLocaleTimeString("en-US", { hour12: false });
 }
 
+// ---------------------------------------------------------------------------
+// Extracted pure functions — testable without React
+// ---------------------------------------------------------------------------
+
+export interface BatchResult {
+  agents: Agent[];
+  selectFirst: boolean;
+  deselectId: string | null;
+}
+
+export function applyBatch(
+  agents: Agent[],
+  batch: Record<string, unknown>[],
+): BatchResult {
+  let next = agents;
+  for (const msg of batch) {
+    next = applyMessage(next, msg);
+  }
+  const lastInit = batch.findLast((m) => m.type === "init");
+  const selectFirst = !!(lastInit && next.length > 0);
+  const lastDc = batch.findLast((m) => m.type === "agent_disconnected");
+  const deselectId = lastDc ? (lastDc.agent_id as string) : null;
+  return { agents: next, selectFirst, deselectId };
+}
+
+export function buildCommand(
+  action: string,
+  agentId: string,
+  content?: string,
+): Record<string, string> | null {
+  if (!agentId) return null;
+  const msg: Record<string, string> = {
+    type: "command",
+    agent_id: agentId,
+    action,
+  };
+  if (content !== undefined) msg.content = content;
+  return msg;
+}
+
+export function parseWsMessage(raw: string): Record<string, unknown> | null {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+export function nextReconnectDelay(current: number, maxDelay = 30000): number {
+  return Math.min(current * 2, maxDelay);
+}
+
+export function resolveSelectedId(
+  prevId: string,
+  result: BatchResult,
+): string {
+  let id = prevId;
+  if (result.selectFirst && !id && result.agents.length > 0) {
+    id = result.agents[0].id;
+  }
+  if (result.deselectId && id === result.deselectId) {
+    id = "";
+  }
+  return id;
+}
+
+export function findAgent(agents: Agent[], id: string): Agent | undefined {
+  return agents.find((a) => a.id === id);
+}
+
+export function createAgent(id: string, overrides: Partial<Agent> = {}): Agent {
+  return {
+    id,
+    name: id,
+    task: "",
+    state: "PROGRESSING",
+    confidence: 100,
+    logs: [],
+    ...overrides,
+  };
+}
+
+const KNOWN_TYPES = new Set([
+  "init", "agent_disconnected", "frame_update",
+  "terminal_screen_update", "log_update", "update",
+]);
+
+export function isKnownMessageType(data: Record<string, unknown>): boolean {
+  return typeof data.type === "string" && KNOWN_TYPES.has(data.type);
+}
+
 export function applyMessage(agents: Agent[], data: Record<string, unknown>): Agent[] {
   if (data.type === "init") {
     const states = data.data as Record<string, Record<string, unknown>>;
@@ -148,20 +239,9 @@ export function useAgentSocket(url: string) {
       flushTimerRef.current = null;
 
       setAgents((prev) => {
-        let next = prev;
-        for (const msg of batch) {
-          next = applyMessage(next, msg);
-        }
-        // Handle selection for init/disconnect
-        const lastInit = batch.findLast(m => m.type === "init");
-        if (lastInit && next.length > 0) {
-          setSelectedAgentId((prevId) => prevId || next[0].id);
-        }
-        const lastDc = batch.findLast(m => m.type === "agent_disconnected");
-        if (lastDc) {
-          setSelectedAgentId((prevId) => prevId === lastDc.agent_id ? "" : prevId);
-        }
-        return next;
+        const result = applyBatch(prev, batch);
+        setSelectedAgentId((prevId) => resolveSelectedId(prevId, result));
+        return result.agents;
       });
     }
 
@@ -178,14 +258,11 @@ export function useAgentSocket(url: string) {
       };
 
       ws.onmessage = (event) => {
-        let data: Record<string, unknown>;
-        try {
-          data = JSON.parse(event.data);
-        } catch {
+        const data = parseWsMessage(event.data);
+        if (!data) {
           console.warn("[dashboard] Received malformed JSON:", event.data);
           return;
         }
-
         msgBufferRef.current.push(data);
         if (!flushTimerRef.current) {
           flushTimerRef.current = requestAnimationFrame(flushMessages);
@@ -199,7 +276,7 @@ export function useAgentSocket(url: string) {
           const delay = reconnectDelayRef.current;
           console.log(`[dashboard] Reconnecting in ${delay / 1000}s...`);
           reconnectTimerRef.current = setTimeout(connect, delay);
-          reconnectDelayRef.current = Math.min(delay * 2, 30000);
+          reconnectDelayRef.current = nextReconnectDelay(delay);
         }
       };
     }
@@ -216,13 +293,8 @@ export function useAgentSocket(url: string) {
 
   const sendCommand = useCallback(
     (action: string, content?: string) => {
-      if (wsRef.current?.readyState === WebSocket.OPEN && selectedAgentId) {
-        const msg: Record<string, string> = {
-          type: "command",
-          agent_id: selectedAgentId,
-          action,
-        };
-        if (content !== undefined) msg.content = content;
+      const msg = buildCommand(action, selectedAgentId, content);
+      if (msg && wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify(msg));
       }
     },
@@ -233,7 +305,7 @@ export function useAgentSocket(url: string) {
     agents,
     selectedAgentId,
     setSelectedAgentId,
-    selectedAgent: agents.find((a) => a.id === selectedAgentId),
+    selectedAgent: findAgent(agents, selectedAgentId),
     sendCommand,
     connected,
     wsRef,

@@ -460,4 +460,115 @@ describe("createHub", () => {
     dash.close();
     rmSync(tmpDir, { recursive: true, force: true });
   });
+
+  test("hub stores telemetry_update messages from probe", async () => {
+    hub = createHub(0, ":memory:");
+
+    const probe = new WebSocket(wsUrl(hub, "/ws/probe"));
+    await waitForOpen(probe);
+    probe.send(JSON.stringify({ type: "register", agent_id: "telem-01" }));
+    await Bun.sleep(50);
+
+    probe.send(JSON.stringify({
+      type: "telemetry_update",
+      agent_id: "telem-01",
+      event_type: "tool_call",
+      run_id: "run-abc",
+      data: { tool: "bash", args: ["ls"] },
+      telemetry: { context_percent: 42.5, active_runs: 2 },
+    }));
+
+    await Bun.sleep(50);
+
+    const events = hub.db!.getTelemetryEvents("telem-01");
+    expect(events).toHaveLength(1);
+    expect(events[0].event_type).toBe("tool_call");
+    expect(events[0].run_id).toBe("run-abc");
+    expect(events[0].context_percent).toBe(42.5);
+    expect(events[0].active_runs).toBe(2);
+    const data = JSON.parse(events[0].data);
+    expect(data.tool).toBe("bash");
+
+    probe.close();
+  });
+
+  test("hub broadcasts telemetry_update to dashboards", async () => {
+    hub = createHub(0, ":memory:");
+
+    const dash = new WebSocket(wsUrl(hub, "/ws/dashboard"));
+    await waitForMessage(dash); // init
+
+    const probe = new WebSocket(wsUrl(hub, "/ws/probe"));
+    await waitForOpen(probe);
+    probe.send(JSON.stringify({ type: "register", agent_id: "telem-02" }));
+    await waitForMessage(dash); // init
+
+    probe.send(JSON.stringify({
+      type: "telemetry_update",
+      agent_id: "telem-02",
+      event_type: "token_usage",
+      run_id: "run-xyz",
+      data: { tokens: 500 },
+      telemetry: { context_percent: 80, active_runs: 1 },
+    }));
+
+    const msg = await waitForMessage(dash);
+    expect(msg.type).toBe("telemetry_update");
+    expect(msg.event_type).toBe("token_usage");
+    expect(msg.run_id).toBe("run-xyz");
+
+    probe.close();
+    dash.close();
+  });
+
+  test("GET /api/agents/:id/telemetry returns stored events", async () => {
+    hub = createHub(0, ":memory:");
+
+    // Insert telemetry directly via db
+    hub.db!.insertTelemetryEvent("A-01", "tool_call", "run-1", '{"tool":"bash"}', 42.5, 2, 1000);
+    hub.db!.insertTelemetryEvent("A-01", "error", "run-1", '{"msg":"fail"}', 50, 2, 2000);
+
+    const res = await fetch(`http://localhost:${hub.server.port}/api/agents/A-01/telemetry`);
+    expect(res.status).toBe(200);
+    const events = await res.json();
+    expect(events).toHaveLength(2);
+    expect(events[0].timestamp).toBe(2000); // newest first
+    expect(events[0].event_type).toBe("error");
+    expect(events[1].timestamp).toBe(1000);
+    expect(events[1].event_type).toBe("tool_call");
+  });
+
+  test("GET /api/agents/:id/telemetry supports query params", async () => {
+    hub = createHub(0, ":memory:");
+
+    hub.db!.insertTelemetryEvent("A-01", "tool_call", "run-1", "{}", 10, 1, 1000);
+    hub.db!.insertTelemetryEvent("A-01", "tool_call", "run-2", "{}", 20, 2, 2000);
+    hub.db!.insertTelemetryEvent("A-01", "error", "run-1", "{}", 30, 1, 3000);
+    hub.db!.insertTelemetryEvent("A-01", "tool_call", "run-1", "{}", 40, 1, 4000);
+
+    // Filter by run_id
+    let res = await fetch(`http://localhost:${hub.server.port}/api/agents/A-01/telemetry?run_id=run-1`);
+    let events = await res.json();
+    expect(events).toHaveLength(3);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(events.every((e: any) => e.run_id === "run-1")).toBe(true);
+
+    // Filter by since
+    res = await fetch(`http://localhost:${hub.server.port}/api/agents/A-01/telemetry?since=3000`);
+    events = await res.json();
+    expect(events).toHaveLength(2);
+    expect(events[0].timestamp).toBe(4000);
+
+    // Filter by before
+    res = await fetch(`http://localhost:${hub.server.port}/api/agents/A-01/telemetry?before=3000`);
+    events = await res.json();
+    expect(events).toHaveLength(2);
+    expect(events[0].timestamp).toBe(2000);
+
+    // Pagination: limit + offset
+    res = await fetch(`http://localhost:${hub.server.port}/api/agents/A-01/telemetry?limit=2&offset=1`);
+    events = await res.json();
+    expect(events).toHaveLength(2);
+    expect(events[0].timestamp).toBe(3000); // second newest
+  });
 });
